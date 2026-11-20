@@ -14,5 +14,9 @@
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "wrangler": "^4.165.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.11.0",
+    "qrcode-generator": "^2.0.4"
   }
 }

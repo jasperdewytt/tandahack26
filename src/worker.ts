@@ -1,5 +1,6 @@
-// Lip Service Worker: a thin proxy for Deepgram and Anthropic, plus presenter-token check.
-// Static assets (the app and the viseme index) are served by Workers Assets.
+// Lip Service Worker: a thin proxy for Deepgram and Anthropic, plus the presenter-token check.
+// Static assets (the app, lex.txt, block.json) are served by Workers Assets.
+import Anthropic from "@anthropic-ai/sdk";
 
 export interface Env {
   ASSETS: Fetcher;
@@ -25,21 +26,23 @@ const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =
 async function limited(req: Request, perIp: RateLimit, global: RateLimit): Promise<Response | null> {
   const ip = req.headers.get("cf-connecting-ip") ?? "unknown";
   const [a, b] = await Promise.all([perIp.limit({ key: ip }), global.limit({ key: "all" })]);
-  if (!a.success) return json({ error: "slow_down", message: "Too many tries from you. Wait a minute." }, 429, { "retry-after": "60" });
-  if (!b.success) return json({ error: "busy", message: "Everyone is playing at once. Try again in a minute." }, 429, { "retry-after": "60" });
+  if (!a.success) return json({ error: "slow_down", message: "Too many tries from this device. Wait a minute, then try again." }, 429, { "retry-after": "60" });
+  if (!b.success) return json({ error: "busy", message: "Lots of people are playing right now. Try again in a minute." }, 429, { "retry-after": "60" });
   return null;
 }
+
+// ---------- Deepgram ----------
 
 async function transcribe(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const len = Number(req.headers.get("content-length") ?? "0");
-  if (len > MAX_MEDIA_BYTES) return json({ error: "too_big", message: "Recording too large." }, 413);
+  if (len > MAX_MEDIA_BYTES) return json({ error: "too_big", message: "That recording is too large. Keep it to about 10 seconds." }, 413);
   const rl = await limited(req, env.RL_DG_IP, env.RL_DG_ALL);
   if (rl) return rl;
 
   const type = (req.headers.get("content-type") ?? "application/octet-stream").split(";")[0];
-  const url =
-    "https://api.deepgram.com/v1/listen?model=nova-3&language=en&smart_format=true&punctuate=true&mip_opt_out=true";
+  // No smart_format: numbers stay as words so they can be looked up by pronunciation.
+  const url = "https://api.deepgram.com/v1/listen?model=nova-3&language=en&punctuate=true&mip_opt_out=true";
   const dg = await fetch(url, {
     method: "POST",
     headers: { authorization: `Token ${env.DEEPGRAM_API_KEY}`, "content-type": type },
@@ -60,22 +63,39 @@ async function transcribe(req: Request, env: Env): Promise<Response> {
   return json({ transcript: alt?.transcript ?? "", words, duration: data?.metadata?.duration ?? null });
 }
 
+// ---------- Anthropic ----------
+
 interface AlibiReq {
   phrase: string[];
   slots: { i: number; word: string; exact: string[]; near: string[] }[];
 }
 
-const SYSTEM = `You write captions for "Lip Service", a party game. A person was filmed saying a short phrase. The clip loops on screen MUTED. We swap exactly one word in the caption for a word that the speaker's mouth visibly also fits, so viewers believe the person silently said the new line.
+const SYSTEM = `You write captions for "Lip Service", a party game. A person was filmed saying a short phrase. The clip loops on screen MUTED. We swap exactly one word in the caption for a word the speaker's mouth visibly also fits, so viewers believe the person silently said the new line.
 
-You get the phrase and, for some word positions ("slots"), a list of lip-compatible replacement words. "exact" words look identical on the lips; "near" words are one mouth shape off, so only use one when it is much funnier.
+You get the phrase and, for some word positions ("slots", indexed by "i" into the words array), lists of lip-compatible replacement words. "exact" words look identical on the lips. "near" words are one mouth shape off, so only use one when it is much funnier than any exact option.
 
-Pick the TWO funniest single-word swaps. Rules:
+Pick the TWO funniest single-word swaps:
 - Change exactly one word per swap, using a word copied exactly from that slot's lists.
-- The new caption must be a grammatical, natural sentence a person might say.
-- The joke must land from reading the caption alone, in silence: an absurdly specific detail, a sudden change of implication, or mild innuendo. Mild only: nothing hateful, sexual-explicit, or cruel about the speaker's looks.
-- The two swaps should be different jokes (different slots if possible).
+- The new caption must be a grammatical, natural sentence a person might actually say.
+- The joke must land from reading the caption alone, in silence: an absurdly specific detail, a sudden change of implication, or mild innuendo. Keep it mild: nothing hateful, sexually explicit, or cruel about the speaker.
+- Make the two swaps different jokes, in different slots when possible.`;
 
-Reply with ONLY JSON, no prose: {"alibis":[{"slot":<slot index i>,"word":"<replacement>"},{"slot":<i>,"word":"<replacement>"}]}`;
+const SCHEMA = {
+  type: "object",
+  properties: {
+    alibis: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { slot: { type: "integer" }, word: { type: "string" } },
+        required: ["slot", "word"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["alibis"],
+  additionalProperties: false,
+};
 
 async function alibi(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method" }, 405);
@@ -90,7 +110,7 @@ async function alibi(req: Request, env: Env): Promise<Response> {
   } catch {
     return json({ error: "bad_json" }, 400);
   }
-  // Bound the prompt size regardless of what the client sends.
+  // Bound the prompt regardless of what the client sends.
   const phrase = (body.phrase ?? []).slice(0, 14).map((w) => String(w).slice(0, 30));
   const slots = (body.slots ?? []).slice(0, 8).map((s) => ({
     i: Number(s.i),
@@ -100,42 +120,40 @@ async function alibi(req: Request, env: Env): Promise<Response> {
   }));
   if (!phrase.length || !slots.length) return json({ error: "empty" }, 400);
 
-  const user = JSON.stringify({ phrase: phrase.join(" "), words: phrase, slots });
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 25_000 });
+  try {
+    // Thinking off ("between_tools") so the 400-token cap goes to the answer; on a
+    // safety decline the API retries on its default fallback model inside the same call.
+    const res: any = await (client.beta.messages.create as any)({
       model: MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
+      thinking: { type: "between_tools" },
+      output_config: { effort: "low", format: { type: "json_schema", schema: SCHEMA } },
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
       system: SYSTEM,
-      messages: [{ role: "user", content: user }],
-    }),
-  });
-  if (!r.ok) {
-    const detail = (await r.text()).slice(0, 300);
-    return json({ error: "anthropic", status: r.status, detail }, 502);
+      messages: [{ role: "user", content: JSON.stringify({ words: phrase, slots }) }],
+    });
+    if (res.stop_reason === "refusal") return json({ alibis: [], refused: true });
+    const text = (res.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      /* invalid output: return nothing and let the client offer a retake */
+    }
+    const alibis = Array.isArray(parsed?.alibis)
+      ? parsed.alibis.slice(0, 4).map((a: any) => ({ slot: Number(a.slot), word: String(a.word ?? "") }))
+      : [];
+    return json({ alibis, usage: { in: res.usage?.input_tokens, out: res.usage?.output_tokens } });
+  } catch (e) {
+    if (e instanceof Anthropic.RateLimitError) return json({ error: "busy", message: "Lots of people are playing right now. Try again in a minute." }, 429);
+    if (e instanceof Anthropic.APIError) return json({ error: "anthropic", status: e.status, detail: String(e.message).slice(0, 300) }, 502);
+    throw e;
   }
-  const data: any = await r.json();
-  const text: string = (data?.content ?? [])
-    .filter((c: any) => c.type === "text")
-    .map((c: any) => c.text)
-    .join("");
-  const m = text.match(/\{[\s\S]*\}/);
-  let parsed: any = null;
-  try {
-    parsed = m ? JSON.parse(m[0]) : null;
-  } catch {
-    /* fall through */
-  }
-  const alibis = Array.isArray(parsed?.alibis)
-    ? parsed.alibis.slice(0, 4).map((a: any) => ({ slot: Number(a.slot), word: String(a.word ?? "") }))
-    : [];
-  return json({ alibis });
 }
+
+// ---------- presenter ----------
 
 function stageAuth(url: URL, env: Env): Response {
   const k = url.searchParams.get("k") ?? "";

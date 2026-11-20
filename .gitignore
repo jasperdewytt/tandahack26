@@ -8,3 +8,4 @@ dist/
 public/app.js
 public/app.js.map
 .wrangler/
+scripts/.cache/
