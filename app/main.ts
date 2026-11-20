@@ -162,15 +162,8 @@ async function process(take: Take) {
     const ranked = rankPhrases(words, lex, block, tr.duration ?? Infinity);
     if (!ranked.length) throw new Retake("No alibi this time", "Your lips were too honest. Try a longer answer that names a few things.");
 
-    status("Writing your alibi… this takes about 20 seconds.");
-    let alibis: Alibi[] = [];
-    let chosen = ranked[0];
-    // One Sonnet call normally; a second only if the first phrase yields nothing valid.
-    for (const cand of ranked.slice(0, 2)) {
-      chosen = cand;
-      alibis = await askSonnet(cand, block);
-      if (alibis.length) break;
-    }
+    const chosen = ranked[0];
+    const alibis = await writeAlibis(chosen, lex, block);
     if (!alibis.length) throw new Retake("No clean alibi", "We couldn't find a funny line that fits your lips. Try again with a different answer.");
 
     result = {
@@ -251,64 +244,41 @@ function rankPhrases(words: Word[], lex: Lexicon, block: Blocklist, duration: nu
   return out.sort((a, b) => b.score - a.score);
 }
 
-async function askSonnet(r: Ranked, block: Blocklist): Promise<Alibi[]> {
-  const words = r.phrase.words;
-  const payload = {
-    phrase: words.map((w) => w.p),
-    slots: r.slots.map(({ id, said, exact, near }) => ({ id, said, exact, near })),
+/**
+ * Opus writes whole lines; the browser checks each against the lips (Lexicon.check) and the
+ * blocklist. Lines that don't fit go back once with exactly which chunks failed, for small fixes.
+ */
+async function writeAlibis(r: Ranked, lex: Lexicon, block: Blocklist): Promise<Alibi[]> {
+  const said = r.phrase.words.map((w) => w.w);
+  const base = {
+    said: caption(r.phrase.words.map((w) => w.p)),
+    words: lex.describe(said),
+    hints: r.slots.map((s) => ({ said: s.said, options: s.exact.slice(0, 8) })),
   };
-  const data = await api("/api/alibi", JSON.stringify(payload), "application/json");
-  const out: Alibi[] = [];
-  for (const a of data.alibis ?? []) {
-    // Every swap must be an option from its span's lip-checked list; spans may not overlap;
-    // at most one near miss per alibi. A swap that breaks a rule is dropped, so those words
-    // stay as spoken (still lip-true) instead of sinking the whole alibi.
-    const chosen: { slot: Slot; text: string }[] = [];
-    const used = new Set<number>();
-    let nearUsed = false;
-    for (const sw of a.swaps ?? []) {
-      const slot = r.slots.find((s) => s.id === sw.id);
-      const text = String(sw.words ?? "").toLowerCase().replace(/[^a-z' ]/g, "").replace(/\s+/g, " ").trim();
-      if (!slot || !text || text === slot.said || block.blocks(text)) continue;
-      const span = [...Array(slot.n).keys()].map((d) => slot.s + d);
-      if (span.some((i) => used.has(i))) continue;
-      if (slot.exact.includes(text)) chosen.push({ slot, text });
-      else if (slot.near.includes(text) && !nearUsed) {
-        nearUsed = true;
-        chosen.push({ slot, text });
-      } else continue;
-      span.forEach((i) => used.add(i));
-    }
-    if (!chosen.length) continue;
+  const accepted: { text: string; marks: number[]; changed: number }[] = [];
+  let feedback: { line: string; problems: { said: string; wrote: string }[]; unknown: string[] }[] | undefined;
 
-    // Rebuild the caption, keeping capitalisation and punctuation around each replaced span.
-    const tokens: string[] = [];
-    const marks: number[] = [];
-    for (let i = 0; i < words.length; ) {
-      const c = chosen.find((x) => x.slot.s === i);
-      if (!c) {
-        tokens.push(words[i].p);
-        i++;
-        continue;
+  for (let round = 0; round < 2 && accepted.length < 2; round++) {
+    status(round === 0 ? "Writing your alibi… this takes about half a minute." : "Nudging the lines to fit your lips…");
+    const data = await api("/api/alibi", JSON.stringify(feedback ? { ...base, feedback } : base), "application/json");
+    feedback = [];
+    for (const line of (data.lines ?? []) as string[]) {
+      const tokens = String(line).split(/\s+/).filter((t) => clean(t));
+      if (!tokens.length) continue;
+      const text = caption(tokens);
+      const chk = lex.check(said, tokens);
+      // Must fit the lips, be clean, and actually change something.
+      if (chk.ok && chk.changedSaid > 0 && !block.blocks(text) && !accepted.some((x) => x.text === text)) {
+        accepted.push({ text, marks: chk.changed, changed: chk.changedSaid });
+      } else if (!chk.ok) {
+        feedback.push({ line: text, problems: chk.problems, unknown: chk.unknown });
       }
-      const repl = c.text.split(" ");
-      const first = words[i].p;
-      const last = words[i + c.slot.n - 1].p;
-      repl.forEach((w, k) => {
-        let t = w;
-        if (k === 0) t = swapCase(first, w).replace(/[^A-Za-z']+$/, "");
-        if (k === repl.length - 1) t += last.match(/[^A-Za-z']*$/)?.[0] ?? "";
-        marks.push(tokens.length);
-        tokens.push(t);
-      });
-      i += c.slot.n;
     }
-    const text = caption(tokens);
-    if (block.blocks(text) || out.some((o) => o.text === text)) continue;
-    out.push({ swaps: chosen.map((c) => ({ i: c.slot.s, word: c.text })), marks, text });
-    if (out.length === 2) break;
+    console.log("alibi round", round + 1, JSON.stringify({ said, accepted: accepted.map((x) => x.text), failed: feedback }));
   }
-  return out;
+  // Prefer the lines that changed the most.
+  accepted.sort((x, y) => y.changed - x.changed);
+  return accepted.slice(0, 2).map((x) => ({ swaps: [], marks: x.marks, text: x.text }));
 }
 
 /** Replace a punctuated word, keeping its capitalisation and trailing punctuation. */

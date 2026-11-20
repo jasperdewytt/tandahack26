@@ -14,10 +14,10 @@ export interface Env {
 }
 
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
-const MODEL = "claude-sonnet-5-5";
-// Thinking plus the answer. Raised from 400 after the phone test: without room to plan,
-// whole-line rewrites came out as word salad. ~US$0.02-0.03 per call; RL_AI_ALL caps the rate.
-const MAX_OUTPUT_TOKENS = 6000;
+// Opus 5.5 at medium effort writes whole lines; the browser checks them against the lips and
+// sends back what doesn't fit for one round of small fixes. Thinking is always on for this model.
+const MODEL = "claude-opus-5-5";
+const MAX_OUTPUT_TOKENS = 8000;
 
 const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), {
@@ -80,46 +80,33 @@ async function transcribe(req: Request, env: Env): Promise<Response> {
 // ---------- Anthropic ----------
 
 interface AlibiReq {
-  phrase: string[];
-  slots: { id: string; said: string; exact: string[]; near: string[] }[];
+  said: string; // the spoken phrase, as captioned
+  words: { w: string; shapes: string; syl: number }[];
+  hints: { said: string; options: string[] }[];
+  feedback?: { line: string; problems: { said: string; wrote: string }[]; unknown: string[] }[];
 }
 
-const SYSTEM = `You write captions for "Lip Service", a party game. A person was filmed saying a phrase. The clip loops on screen MUTED. We rewrite the caption using only words the speaker's mouth visibly also fits, so viewers believe the person silently said a completely different line, like Bad Lip Reading.
+const SYSTEM = `You write captions for "Lip Service", a party game. A person was filmed saying a phrase. The clip loops on screen MUTED, and we caption it with a different line their mouth could just as well be saying, in the style of Bad Lip Reading (the YouTube channel).
 
-You get the phrase as a words array, and "slots": each slot covers one or two adjacent spoken words ("said") and lists text that makes the same mouth shapes. An option can be one word or two words, so a slot can re-split the sounds ("water bottle" -> "what a bottle"). "exact" options look identical on the lips. "near" options are one mouth shape off: use at most ONE near option per alibi. Slots can overlap; never use two slots that cover the same spoken word.
+Mouth-shape codes: P lips closed (p b m), F teeth on lip (f v), D tongue between teeth (th), T (t d n s z), L (l), K hidden (k g ng h y), J lips pushed out (sh zh ch j), R (r er), W tight round lips (w oo), O round open (o aw oy), U (ow as in now), A open (a u), I (eye), E spread (ee e i).
 
-Write the TWO funniest alibis, in the style of Bad Lip Reading (the YouTube channel): the person confidently says something oddly specific, a bit random and surreal, but every line is still a real sentence with a meaning you could picture.
-- Sense comes first. Read each finished caption aloud in your head: it must be a sentence a real person could plausibly say, with a meaning someone could picture (absurd is fine). Every phrase must work grammatically on its own: "my kids" yes, "bye kids" in a list of belongings no; "a pink monk" yes, "buy laptop" no. Random is good; nonsense is not.
-- Within that, change as many spoken words as you can, usually four or more, so it reads as a genuinely different line. Re-splits and small words ("my" -> "by", "and" -> "at") help, but only where the grammar still works. Keep a word as spoken rather than force a swap that breaks the sentence.
-- Try several candidate lines, score each on "makes sense", "funny" and "how much changed", then pick the two best. Use only options copied exactly from a slot's lists; words you don't cover stay as spoken. Before answering, check every swap's "words" appears verbatim in that slot's list and that no two used slots cover the same spoken word.
-- The joke must land from reading the caption alone, in silence: an absurdly specific scenario, a sudden change of implication, or mild innuendo. Keep it mild: nothing hateful, sexually explicit, or cruel about the speaker.
-- The two alibis should be different jokes.
-- Output only "swaps" for each alibi: every slot you used, by its "id", with the option text in "words".`;
+You get the spoken words, each with its shape codes and syllable count. A line FITS when it can be split, in order, into chunks that line up with the spoken words, where each chunk has exactly the same shape codes (repeated codes in a row count once) and the same number of syllables as the spoken words it covers. Chunks may re-split the sounds across word boundaries ("laptop" -> "lab top", "water bottle" -> "what a bottle"). One chunk per line may be off by a single non-P/F/W shape. "hints" lists some known fits for single spoken words and pairs; you may use them or find your own.
+
+Write lines that:
+- FIT the lips (the browser checks every line strictly; lines that don't fit are thrown away).
+- Are a real, grammatical sentence a person could plausibly say, with a meaning you can picture. Oddly specific and a bit random is the goal; word salad is not.
+- Change as many of the spoken words as possible while staying meaningful.
+- Are funny from reading the caption alone, in silence. Mild only: nothing hateful, sexually explicit, or cruel about the speaker.
+- Keep fillers like "oh", "um", "yeah" as spoken.
+
+If "feedback" is present, it holds your earlier lines with the chunks that did NOT fit the lips (what was said, what you wrote) and any words missing from our dictionary. Fix each line with the smallest change: replace only the failing chunks with words that have exactly the needed shapes and syllables, keep everything that already fit, and keep the sentence making sense.
+
+Return exactly 4 different lines in "lines".`;
 
 const SCHEMA = {
   type: "object",
-  properties: {
-    alibis: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          swaps: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { id: { type: "string" }, words: { type: "string" } },
-              required: ["id", "words"],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ["swaps"],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["alibis"],
+  properties: { lines: { type: "array", items: { type: "string" } } },
+  required: ["lines"],
   additionalProperties: false,
 };
 
@@ -137,49 +124,52 @@ async function alibi(req: Request, env: Env): Promise<Response> {
     return json({ error: "bad_json" }, 400);
   }
   // Bound the prompt regardless of what the client sends.
-  const phrase = (body.phrase ?? []).slice(0, 16).map((w) => String(w).slice(0, 30));
-  const slots = (body.slots ?? []).slice(0, 22).map((s) => ({
-    id: String(s.id).slice(0, 6),
-    said: String(s.said).slice(0, 40),
-    exact: (s.exact ?? []).slice(0, 20).map((w) => String(w).slice(0, 40)),
-    near: (s.near ?? []).slice(0, 6).map((w) => String(w).slice(0, 40)),
-  }));
-  if (!phrase.length || !slots.length) return json({ error: "empty" }, 400);
+  const cut = (x: unknown, n: number) => String(x ?? "").slice(0, n);
+  const input = {
+    said: cut(body.said, 200),
+    words: (body.words ?? []).slice(0, 16).map((w) => ({ w: cut(w.w, 30), shapes: cut(w.shapes, 40), syl: Number(w.syl) || 0 })),
+    hints: (body.hints ?? []).slice(0, 24).map((h) => ({ said: cut(h.said, 40), options: (h.options ?? []).slice(0, 10).map((o) => cut(o, 40)) })),
+    ...(body.feedback
+      ? {
+          feedback: body.feedback.slice(0, 4).map((f) => ({
+            line: cut(f.line, 200),
+            problems: (f.problems ?? []).slice(0, 8).map((p) => ({ said: cut(p.said, 60), wrote: cut(p.wrote, 60) })),
+            unknown: (f.unknown ?? []).slice(0, 8).map((u) => cut(u, 30)),
+          })),
+        }
+      : {}),
+  };
+  if (!input.said || !input.words.length) return json({ error: "empty" }, 400);
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 60_000 });
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 90_000 });
   try {
-    // Adaptive thinking at high effort (medium sometimes skipped planning): building a coherent line from lip-locked options
-    // needs planning. On a safety decline the API retries on its default fallback model.
+    // Thinking is always on for Opus 5.5; medium effort. On a safety decline the API retries
+    // on its default fallback model inside the same call.
     const res: any = await (client.beta.messages.create as any)({
       model: MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "high", format: { type: "json_schema", schema: SCHEMA } },
+      output_config: { effort: "medium", format: { type: "json_schema", schema: SCHEMA } },
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       system: SYSTEM,
-      messages: [{ role: "user", content: JSON.stringify({ words: phrase, slots }) }],
+      messages: [{ role: "user", content: JSON.stringify(input) }],
     });
-    if (res.stop_reason === "refusal") return json({ alibis: [], refused: true });
+    if (res.stop_reason === "refusal") return json({ lines: [], refused: true });
     const text = (res.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
     let parsed: any = null;
     try {
       parsed = JSON.parse(text);
     } catch {
-      /* invalid output: return nothing and let the client offer a retake */
+      /* cut off or invalid: return no lines and let the client retry or offer a retake */
     }
-    const alibis = Array.isArray(parsed?.alibis)
-      ? parsed.alibis.slice(0, 4).map((a: any) => ({
-          swaps: (Array.isArray(a.swaps) ? a.swaps : [])
-            .slice(0, 12)
-            .map((s: any) => ({ id: String(s.id ?? ""), words: String(s.words ?? "").slice(0, 40) })),
-        }))
-      : [];
-    // max_tokens cut-offs return invalid JSON above, so they surface as "no alibi" rather than half a caption.
-    return json({ alibis, usage: { in: res.usage?.input_tokens, out: res.usage?.output_tokens } });
+    const lines = Array.isArray(parsed?.lines) ? parsed.lines.slice(0, 6).map((l: any) => cut(l, 200)) : [];
+    return json({ lines, usage: { in: res.usage?.input_tokens, out: res.usage?.output_tokens } });
   } catch (e) {
     if (e instanceof Anthropic.RateLimitError) return json({ error: "busy", message: "Lots of people are playing right now. Try again in a minute." }, 429);
-    if (e instanceof Anthropic.APIError) { console.log("anthropic failed", e.status, String(e.message).slice(0, 300)); return json({ error: "anthropic", status: e.status, detail: String(e.message).slice(0, 300), message: "The alibi writer didn't answer. Tap Retake to try again." }, 502); }
+    if (e instanceof Anthropic.APIError) {
+      console.log("anthropic failed", e.status, String(e.message).slice(0, 300));
+      return json({ error: "anthropic", status: e.status, message: "The alibi writer didn't answer. Tap Retake to try again." }, 502);
+    }
     throw e;
   }
 }

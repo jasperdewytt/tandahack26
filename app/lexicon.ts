@@ -7,6 +7,14 @@
 
 export interface Entry { key: string; syl: number; cand: boolean }
 export interface SpanOptions { exact: string[]; near: string[] }
+export interface LipCheck {
+  ok: boolean;
+  near: number;
+  problems: { said: string; wrote: string }[]; // chunks that don't fit the lips
+  changed: number[]; // indices into the written words that differ from what was said
+  unknown: string[]; // written words not in the pronunciation dictionary
+  changedSaid: number; // how many spoken words were replaced
+}
 
 const PROTECTED = new Set(["P", "F", "W"]);
 const VOWELISH = ["A", "E", "O", "I", "U"];
@@ -50,6 +58,95 @@ export class Lexicon {
 
   private words(key: string, syl: number): string[] {
     return this.reverse.get(`${key}|${syl}`) ?? [];
+  }
+
+  /** Mouth shapes of a run of words, or null if any word isn't in the dictionary. */
+  shapesOf(ws: string[]): { key: string; syl: number } | null {
+    let key = "";
+    let syl = 0;
+    for (const w of ws) {
+      const e = this.forward.get(clean(w));
+      if (!e) return null;
+      key += e.key;
+      syl += e.syl;
+    }
+    return { key: collapse(key), syl };
+  }
+
+  /**
+   * Can `wrote` be read off the lips that said `said`? Lines the two up in chunks of 1-3 words
+   * on each side (so sounds can be re-split across word boundaries). A chunk fits when its mouth
+   * shapes and syllables match, or (once per line) are one non-protected shape off.
+   * Returns the chunks that don't fit, so the writer can be told exactly what to fix.
+   */
+  check(said: string[], wrote: string[]): LipCheck {
+    const S = said.map(clean).filter(Boolean);
+    const W = wrote.map(clean).filter(Boolean);
+    const n = S.length, m = W.length;
+    type Step = { pi: number; pj: number; kind: "same" | "swap" | "near" | "bad" };
+    const cost: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(Infinity));
+    const back: (Step | null)[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(null));
+    cost[0][0] = 0;
+    for (let i = 0; i <= n; i++) {
+      for (let j = 0; j <= m; j++) {
+        if (cost[i][j] === Infinity) continue;
+        for (let a = 1; a <= 3 && i + a <= n; a++) {
+          for (let b = 1; b <= 3 && j + b <= m; b++) {
+            const s = S.slice(i, i + a), w = W.slice(j, j + b);
+            let kind: Step["kind"];
+            let c: number;
+            if (a === 1 && b === 1 && s[0] === w[0]) { kind = "same"; c = 0; }
+            else {
+              const ks = this.shapesOf(s), kw = this.shapesOf(w);
+              if (ks && kw && ks.syl === kw.syl && ks.key === kw.key) { kind = "swap"; c = 0.01 * (a + b); }
+              else if (ks && kw && ks.syl === kw.syl && nearKey(ks.key, kw.key)) { kind = "near"; c = 1; }
+              else { kind = "bad"; c = 100 * Math.max(a, b); } // narrowest possible bad chunks
+            }
+            if (cost[i][j] + c < cost[i + a][j + b]) {
+              cost[i + a][j + b] = cost[i][j] + c;
+              back[i + a][j + b] = { pi: i, pj: j, kind };
+            }
+          }
+        }
+      }
+    }
+    const problems: { said: string; wrote: string }[] = [];
+    const nearChunks: { said: string; wrote: string }[] = [];
+    const changed: number[] = [];
+    const unknown = W.filter((w) => !this.forward.has(w));
+    let changedSaid = 0;
+    if (cost[n][m] === Infinity) {
+      return { ok: false, near: 0, problems: [{ said: S.join(" "), wrote: W.join(" ") }], changed: [], unknown, changedSaid: 0 };
+    }
+    for (let i = n, j = m; i > 0 || j > 0; ) {
+      const st = back[i][j]!;
+      const chunk = { said: S.slice(st.pi, i).join(" "), wrote: W.slice(st.pj, j).join(" ") };
+      if (st.kind !== "same") {
+        for (let k = st.pj; k < j; k++) changed.push(k);
+        changedSaid += i - st.pi;
+      }
+      if (st.kind === "bad") problems.push(chunk);
+      if (st.kind === "near") nearChunks.push(chunk);
+      i = st.pi;
+      j = st.pj;
+    }
+    if (nearChunks.length > 1) problems.push(...nearChunks.slice(1)); // only one near miss allowed
+    return {
+      ok: problems.length === 0,
+      near: Math.min(nearChunks.length, 1),
+      problems: problems.reverse(),
+      changed: changed.sort((x, y) => x - y),
+      unknown,
+      changedSaid,
+    };
+  }
+
+  /** Mouth-shape codes per spoken word, for the writer prompt. */
+  describe(said: string[]): { w: string; shapes: string; syl: number }[] {
+    return said.map((w) => {
+      const e = this.forward.get(clean(w));
+      return { w, shapes: e ? e.key.split("").join(" ") : "?", syl: e?.syl ?? 0 };
+    });
   }
 
   /**
@@ -134,4 +231,19 @@ const collapse = (k: string) => k.replace(/(.)\1+/g, "$1");
 function sameStem(a: string, b: string): boolean {
   const s = (x: string) => x.replace(/('s|s|es|ed|ing|er|ers)$/, "");
   return s(a) === s(b);
+}
+
+/** Same length, exactly one shape different, and that shape isn't a protected one. */
+function nearKey(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = -1;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    if (diff >= 0) return false;
+    diff = i;
+  }
+  if (diff < 0) return false;
+  const x = a[diff], y = b[diff];
+  if (PROTECTED.has(x) || PROTECTED.has(y)) return false;
+  return (VOWELISH.includes(x) && VOWELISH.includes(y)) || (CONSONANTISH.includes(x) && CONSONANTISH.includes(y));
 }
