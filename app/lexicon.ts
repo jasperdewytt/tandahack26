@@ -14,9 +14,16 @@ export interface LipCheck {
   changed: number[]; // indices into the written words that differ from what was said
   unknown: string[]; // written words not in the pronunciation dictionary
   changedSaid: number; // how many spoken words were replaced
+  chunks: { s0: number; s1: number; w0: number; w1: number }[]; // aligned spans: said[s0,s1) ~ wrote[w0,w1)
 }
 
 const PROTECTED = new Set(["P", "F", "W"]);
+// Unrounded vowels (a, e, i) are hard to tell apart on a muted face, so they share one shape.
+// Rounded vowels (O, U, W) and every consonant shape stay distinct.
+// A chunk that doesn't match shape-for-shape still fits if its visible pattern matches (see
+// pattern()): the SPEC's hard constraints. There's no limit on how many chunks fit that way.
+const MAX_NEAR = Infinity;
+const normalise = (key: string) => collapse(key.replace(/[EI]/g, "A"));
 const VOWELISH = ["A", "E", "O", "I", "U"];
 const CONSONANTISH = ["D", "T", "L", "K", "J", "R"];
 
@@ -36,12 +43,12 @@ export class Lexicon {
     let i = 0;
     for (const line of text.split(/\r?\n/)) {
       if (!line) continue;
-      const [word, key, syl, star] = line.split(" ");
-      const e = { key, syl: Number(syl), cand: star !== "*" };
+      const [word, raw, syl, star] = line.split(" ");
+      const e = { key: normalise(raw), syl: Number(syl), cand: star !== "*" };
       lex.forward.set(word, e);
       lex.rank.set(word, i++);
       if (e.cand) {
-        const k = `${key}|${e.syl}`;
+        const k = `${e.key}|${e.syl}`;
         const list = lex.reverse.get(k);
         if (list) list.push(word);
         else lex.reverse.set(k, [word]);
@@ -99,7 +106,7 @@ export class Lexicon {
             else {
               const ks = this.shapesOf(s), kw = this.shapesOf(w);
               if (ks && kw && ks.syl === kw.syl && ks.key === kw.key) { kind = "swap"; c = 0.01 * (a + b); }
-              else if (ks && kw && ks.syl === kw.syl && nearKey(ks.key, kw.key)) { kind = "near"; c = 1; }
+              else if (ks && kw && ks.syl === kw.syl && pattern(ks.key) === pattern(kw.key)) { kind = "near"; c = 0.5 * Math.max(a, b); }
               else { kind = "bad"; c = 100 * Math.max(a, b); } // narrowest possible bad chunks
             }
             if (cost[i][j] + c < cost[i + a][j + b]) {
@@ -113,14 +120,16 @@ export class Lexicon {
     const problems: { said: string; wrote: string }[] = [];
     const nearChunks: { said: string; wrote: string }[] = [];
     const changed: number[] = [];
+    const chunks: { s0: number; s1: number; w0: number; w1: number }[] = [];
     const unknown = W.filter((w) => !this.forward.has(w));
     let changedSaid = 0;
     if (cost[n][m] === Infinity) {
-      return { ok: false, near: 0, problems: [{ said: S.join(" "), wrote: W.join(" ") }], changed: [], unknown, changedSaid: 0 };
+      return { ok: false, near: 0, problems: [{ said: S.join(" "), wrote: W.join(" ") }], changed: [], unknown, changedSaid: 0, chunks: [] };
     }
     for (let i = n, j = m; i > 0 || j > 0; ) {
       const st = back[i][j]!;
       const chunk = { said: S.slice(st.pi, i).join(" "), wrote: W.slice(st.pj, j).join(" ") };
+      chunks.push({ s0: st.pi, s1: i, w0: st.pj, w1: j });
       if (st.kind !== "same") {
         for (let k = st.pj; k < j; k++) changed.push(k);
         changedSaid += i - st.pi;
@@ -130,12 +139,13 @@ export class Lexicon {
       i = st.pi;
       j = st.pj;
     }
-    if (nearChunks.length > 1) problems.push(...nearChunks.slice(1)); // only one near miss allowed
+    if (nearChunks.length > MAX_NEAR) problems.push(...nearChunks.slice(MAX_NEAR));
     return {
       ok: problems.length === 0,
-      near: Math.min(nearChunks.length, 1),
+      near: Math.min(nearChunks.length, MAX_NEAR),
       problems: problems.reverse(),
       changed: changed.sort((x, y) => x - y),
+      chunks: chunks.reverse(),
       unknown,
       changedSaid,
     };
@@ -145,7 +155,7 @@ export class Lexicon {
   describe(said: string[]): { w: string; shapes: string; syl: number }[] {
     return said.map((w) => {
       const e = this.forward.get(clean(w));
-      return { w, shapes: e ? e.key.split("").join(" ") : "?", syl: e?.syl ?? 0 };
+      return { w, shapes: e ? pattern(e.key).split("").join(" ") : "?", syl: e?.syl ?? 0 };
     });
   }
 
@@ -246,4 +256,17 @@ function nearKey(a: string, b: string): boolean {
   const x = a[diff], y = b[diff];
   if (PROTECTED.has(x) || PROTECTED.has(y)) return false;
   return (VOWELISH.includes(x) && VOWELISH.includes(y)) || (CONSONANTISH.includes(x) && CONSONANTISH.includes(y));
+}
+
+/**
+ * The visible pattern of a mouth-shape sequence: what the SPEC requires to stay put. Closed lips
+ * (P), teeth on lip (F) and rounded lips/vowels (W, O, U -> W) keep their identity; every other
+ * consonant becomes "c" and every unrounded vowel "V". Runs of the same symbol merge.
+ */
+export function pattern(key: string): string {
+  return key
+    .replace(/[OU]/g, "W")
+    .replace(/[DTLKJR]/g, "c")
+    .replace(/A/g, "V")
+    .replace(/(.)\1+/g, "$1");
 }

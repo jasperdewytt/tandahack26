@@ -1,4 +1,5 @@
-// Choose a 4-6 second phrase that starts and ends at pauses, from Deepgram word timings.
+// Choose the stretch of the answer to loop: ideally most of it (up to ~12 s), starting and
+// ending at pauses, so the alibi can tell a little story.
 
 export interface Word { w: string; p: string; s: number; e: number }
 
@@ -10,9 +11,9 @@ export interface Phrase {
 
 const PAUSE = 0.25; // gap that counts as a pause
 const MIN_SECONDS = 2.5;
-const MAX_SECONDS = 6.5;
-const MAX_WORDS = 12;
-export const TARGET_SECONDS = 5;
+const MAX_SECONDS = 12;
+const MAX_WORDS = 30;
+export const TARGET_SECONDS = 9;
 
 /** Pause-bounded runs of speech. */
 function runs(words: Word[]): Word[][] {
@@ -63,7 +64,7 @@ export function spans(words: Word[]): Word[][] {
 
 /** 1 at the target length, falling towards 0 at the edges. */
 export function lengthFit(ws: Word[]): number {
-  return Math.max(0, 1 - Math.abs(dur(ws) - TARGET_SECONDS) / 3);
+  return Math.max(0, 1 - Math.abs(dur(ws) - TARGET_SECONDS) / 6);
 }
 
 export function toPhrase(ws: Word[], clipDuration = Infinity): Phrase {

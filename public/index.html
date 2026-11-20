@@ -21,9 +21,11 @@
       <p class="tagline">your mouth has an alibi</p>
       <p class="lede">Answer one question on camera. We find words your lips could just as easily have said, then play your clip back on mute.</p>
       <p class="question">What did you bring with you today?</p>
+      <label class="topic" for="topic">Make your alibi about something <span>(optional)</span></label>
+      <input id="topic" class="topic-input" type="text" maxlength="60" autocomplete="off" placeholder="pirates, my boss, a heist">
       <label class="consent">
         <input type="checkbox" id="consent">
-        <span>I agree to be recorded for about 10 seconds. The video stays on this phone. The sound goes to a transcription service and isn't kept.</span>
+        <span>I agree to be recorded for about 12 seconds. The video stays on this phone. The sound goes to a transcription service and isn't kept.</span>
       </label>
       <button class="primary" id="start" disabled>Start recording</button>
       <p class="aside" id="sample-wrap" hidden>No camera handy? <a href="/sample" id="sample-link">Try the sample clip</a>.</p>
@@ -34,7 +36,7 @@
       <div class="frame">
         <video id="live" playsinline muted autoplay></video>
         <div class="rec-meter"><span id="rec-bar"></span></div>
-        <p class="rec-count" id="rec-count">10</p>
+        <p class="rec-count" id="rec-count">12</p>
       </div>
       <p class="question">What did you bring with you today?</p>
       <p class="hint">Talk naturally, a full sentence or two. Face the camera so your lips are clear.</p>
@@ -54,6 +56,7 @@
         <p class="caption" id="caption"></p>
       </div>
       <div class="toggle" id="toggle" role="radiogroup" aria-label="Caption"></div>
+      <p class="note" id="upgrade-note" role="status" hidden><span class="dot" aria-hidden="true"></span>Writing funnier ones…</p>
       <p class="hint" id="reveal-hint">Same footage, same speed, no sound. Tap between captions and watch the mouth.</p>
       <div class="presenter" id="presenter" hidden>
         <p class="presenter-title">Big screen</p>

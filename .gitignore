@@ -10,3 +10,4 @@ public/app.js.map
 .wrangler/
 scripts/.cache/
 public/dev/
+testdata/

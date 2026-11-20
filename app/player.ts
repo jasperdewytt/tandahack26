@@ -7,6 +7,13 @@ export class LoopPlayer {
   start = 0;
   end = Infinity;
 
+  /** Called on every frame/timeupdate with the playhead time (for timed subtitles). */
+  onTime: ((t: number) => void) | null = null;
+
+  get time() {
+    return this.video.currentTime;
+  }
+
   constructor(private video: HTMLVideoElement) {
     video.muted = true;
     video.defaultMuted = true;
@@ -24,6 +31,7 @@ export class LoopPlayer {
   private check() {
     if (!this.active) return;
     const t = this.video.currentTime;
+    this.onTime?.(t);
     if (t >= this.end || this.video.ended || t < this.start - 0.25) {
       this.video.currentTime = this.start;
       if (this.video.paused) this.video.play().catch(() => {});

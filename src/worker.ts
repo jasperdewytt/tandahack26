@@ -1,6 +1,7 @@
 // Lip Service Worker: a thin proxy for Deepgram and Anthropic, plus the presenter-token check.
 // Static assets (the app, lex.txt, block.json) are served by Workers Assets.
 import Anthropic from "@anthropic-ai/sdk";
+import { SYSTEM, SCHEMA, MODEL, EFFORT, MAX_OUTPUT_TOKENS } from "./prompt";
 
 export interface Env {
   ASSETS: Fetcher;
@@ -14,10 +15,6 @@ export interface Env {
 }
 
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
-// Opus 5.5 at medium effort writes whole lines; the browser checks them against the lips and
-// sends back what doesn't fit for one round of small fixes. Thinking is always on for this model.
-const MODEL = "claude-opus-5-5";
-const MAX_OUTPUT_TOKENS = 8000;
 
 const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), {
@@ -81,34 +78,12 @@ async function transcribe(req: Request, env: Env): Promise<Response> {
 
 interface AlibiReq {
   said: string; // the spoken phrase, as captioned
+  topic?: string; // optional nudge for what the alibi should be about
+  effort?: "low" | "medium"; // "low" is the fast first pass; anything else uses EFFORT
   words: { w: string; shapes: string; syl: number }[];
   hints: { said: string; options: string[] }[];
   feedback?: { line: string; problems: { said: string; wrote: string }[]; unknown: string[] }[];
 }
-
-const SYSTEM = `You write captions for "Lip Service", a party game. A person was filmed saying a phrase. The clip loops on screen MUTED, and we caption it with a different line their mouth could just as well be saying, in the style of Bad Lip Reading (the YouTube channel).
-
-Mouth-shape codes: P lips closed (p b m), F teeth on lip (f v), D tongue between teeth (th), T (t d n s z), L (l), K hidden (k g ng h y), J lips pushed out (sh zh ch j), R (r er), W tight round lips (w oo), O round open (o aw oy), U (ow as in now), A open (a u), I (eye), E spread (ee e i).
-
-You get the spoken words, each with its shape codes and syllable count. A line FITS when it can be split, in order, into chunks that line up with the spoken words, where each chunk has exactly the same shape codes (repeated codes in a row count once) and the same number of syllables as the spoken words it covers. Chunks may re-split the sounds across word boundaries ("laptop" -> "lab top", "water bottle" -> "what a bottle"). One chunk per line may be off by a single non-P/F/W shape. "hints" lists some known fits for single spoken words and pairs; you may use them or find your own.
-
-Write lines that:
-- FIT the lips (the browser checks every line strictly; lines that don't fit are thrown away).
-- Are a real, grammatical sentence a person could plausibly say, with a meaning you can picture. Oddly specific and a bit random is the goal; word salad is not.
-- Change as many of the spoken words as possible while staying meaningful.
-- Are funny from reading the caption alone, in silence. Mild only: nothing hateful, sexually explicit, or cruel about the speaker.
-- Keep fillers like "oh", "um", "yeah" as spoken.
-
-If "feedback" is present, it holds your earlier lines with the chunks that did NOT fit the lips (what was said, what you wrote) and any words missing from our dictionary. Fix each line with the smallest change: replace only the failing chunks with words that have exactly the needed shapes and syllables, keep everything that already fit, and keep the sentence making sense.
-
-Return exactly 4 different lines in "lines".`;
-
-const SCHEMA = {
-  type: "object",
-  properties: { lines: { type: "array", items: { type: "string" } } },
-  required: ["lines"],
-  additionalProperties: false,
-};
 
 async function alibi(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method" }, 405);
@@ -126,13 +101,14 @@ async function alibi(req: Request, env: Env): Promise<Response> {
   // Bound the prompt regardless of what the client sends.
   const cut = (x: unknown, n: number) => String(x ?? "").slice(0, n);
   const input = {
-    said: cut(body.said, 200),
-    words: (body.words ?? []).slice(0, 16).map((w) => ({ w: cut(w.w, 30), shapes: cut(w.shapes, 40), syl: Number(w.syl) || 0 })),
-    hints: (body.hints ?? []).slice(0, 24).map((h) => ({ said: cut(h.said, 40), options: (h.options ?? []).slice(0, 10).map((o) => cut(o, 40)) })),
+    said: cut(body.said, 400),
+    ...(body.topic ? { topic: cut(body.topic, 60) } : {}),
+    words: (body.words ?? []).slice(0, 40).map((w) => ({ w: cut(w.w, 30), shapes: cut(w.shapes, 40), syl: Number(w.syl) || 0 })),
+    hints: (body.hints ?? []).slice(0, 40).map((h) => ({ said: cut(h.said, 40), options: (h.options ?? []).slice(0, 10).map((o) => cut(o, 40)) })),
     ...(body.feedback
       ? {
-          feedback: body.feedback.slice(0, 4).map((f) => ({
-            line: cut(f.line, 200),
+          feedback: body.feedback.slice(0, 6).map((f) => ({
+            line: cut(f.line, 400),
             problems: (f.problems ?? []).slice(0, 8).map((p) => ({ said: cut(p.said, 60), wrote: cut(p.wrote, 60) })),
             unknown: (f.unknown ?? []).slice(0, 8).map((u) => cut(u, 30)),
           })),
@@ -148,7 +124,7 @@ async function alibi(req: Request, env: Env): Promise<Response> {
     const res: any = await (client.beta.messages.create as any)({
       model: MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
-      output_config: { effort: "medium", format: { type: "json_schema", schema: SCHEMA } },
+      output_config: { effort: body.effort === "low" ? "low" : EFFORT, format: { type: "json_schema", schema: SCHEMA } },
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       system: SYSTEM,
@@ -162,7 +138,7 @@ async function alibi(req: Request, env: Env): Promise<Response> {
     } catch {
       /* cut off or invalid: return no lines and let the client retry or offer a retake */
     }
-    const lines = Array.isArray(parsed?.lines) ? parsed.lines.slice(0, 6).map((l: any) => cut(l, 200)) : [];
+    const lines = Array.isArray(parsed?.lines) ? parsed.lines.slice(0, 8).map((l: any) => cut(l, 400)) : [];
     return json({ lines, usage: { in: res.usage?.input_tokens, out: res.usage?.output_tokens } });
   } catch (e) {
     if (e instanceof Anthropic.RateLimitError) return json({ error: "busy", message: "Lots of people are playing right now. Try again in a minute." }, 429);

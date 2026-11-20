@@ -1,9 +1,10 @@
 import qrcode from "qrcode-generator";
 import { openCamera, Recorder, type Take } from "./capture";
 import { LoopPlayer } from "./player";
-import { Lexicon, clean } from "./lexicon";
+import { Lexicon } from "./lexicon";
 import { Blocklist } from "./blocklist";
-import { spans, toPhrase, lengthFit, type Word, type Phrase } from "./phrase";
+import type { Word, Phrase } from "./phrase";
+import { rankPhrases, writeAlibis, caption, originalCues, cueAt, type Alibi, type Cue, type WriteLog } from "./pipeline";
 import { channel, type StageMsg } from "./stage";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -11,20 +12,16 @@ const app = $("app");
 const setView = (v: string) => (app.dataset.view = v);
 const status = (t: string) => ($("status").textContent = t);
 
-const RECORD_SECONDS = 10;
+const RECORD_SECONDS = 12;
 const path = location.pathname.replace(/\/+$/, "") || "/";
 
 // ---------- shared state ----------
 
-interface Alibi {
-  swaps: { i: number; word: string }[];
-  marks: number[]; // word positions in `text` that changed (for highlighting)
-  text: string;
-}
 interface Result {
   clip: Blob;
   phrase: Phrase;
   original: string;
+  originalCues: Cue[];
   alibis: Alibi[];
 }
 
@@ -163,16 +160,54 @@ async function process(take: Take) {
     if (!ranked.length) throw new Retake("No alibi this time", "Your lips were too honest. Try a longer answer that names a few things.");
 
     const chosen = ranked[0];
-    const alibis = await writeAlibis(chosen, lex, block);
-    if (!alibis.length) throw new Retake("No clean alibi", "We couldn't find a funny line that fits your lips. Try again with a different answer.");
+    const post = (path: string, body: string) => api(path, body, "application/json");
+    const log: WriteLog[] = [];
+    // Optional nudge for what the alibi is about; ignored if it hits the blocklist.
+    const rawTopic = $<HTMLInputElement>("topic").value.trim().slice(0, 60);
+    const topic = rawTopic && !block.blocks(rawTopic) ? rawTopic : "";
+    // Two writers at once: a quick low-effort pass so the reveal comes fast, and a slower
+    // medium-effort pass whose (funnier) lines replace the quick ones when they arrive.
+    let lastError: unknown = null;
+    const settle = (p: Promise<Alibi[]>) => p.catch((e) => ((lastError = e), [] as Alibi[]));
+    const fastP = settle(writeAlibis(chosen, lex, block, post, () => {}, [], topic, "low"));
+    const bestP = settle(writeAlibis(chosen, lex, block, post, status, log, topic, "medium"));
+    let bestDone = false;
+    bestP.then(() => (bestDone = true));
+    const first = await new Promise<Alibi[]>((resolve) => {
+      let pending = 2;
+      for (const p of [fastP, bestP]) p.then((a) => (a.length ? resolve(a) : --pending === 0 && resolve([])));
+    });
+    if (!first.length) {
+      if (lastError instanceof ApiError) throw lastError;
+      throw new Retake("No clean alibi", "We couldn't find a funny line that fits your lips. Try again with a different answer.");
+    }
 
-    result = {
+    const mine: Result = {
       clip: take.video,
       phrase: chosen.phrase,
       original: caption(chosen.phrase.words.map((w) => w.p)),
-      alibis,
+      originalCues: originalCues(chosen.phrase),
+      alibis: first,
     };
+    result = mine;
+    const upgrading = !bestDone;
+    $("upgrade-note").hidden = !upgrading;
     await reveal();
+    if (upgrading) {
+      bestP.then((better) => {
+        console.log("alibi lines", JSON.stringify(log));
+        if (result !== mine) return; // they've moved on to another recording
+        if (!better.length) {
+          $("upgrade-note").hidden = true;
+          return;
+        }
+        mine.alibis = better;
+        buildToggle();
+        setCaption();
+        if (presenter) updatePresenter();
+        flashNote("Funnier alibis just arrived.");
+      });
+    }
   } catch (e) {
     if (e instanceof Retake) fail(e.title, e.message);
     else if (e instanceof ApiError) fail("Something went wrong", e.message);
@@ -195,106 +230,6 @@ async function api(url: string, body: BodyInit, type: string): Promise<any> {
   return data;
 }
 
-/** A span of 1-2 spoken words and the lip-compatible text that could replace it. */
-interface Slot { id: string; s: number; n: number; said: string; exact: string[]; near: string[] }
-
-interface Ranked {
-  phrase: Phrase;
-  slots: Slot[];
-  score: number;
-}
-
-function slotsFor(span: Word[], lex: Lexicon, block: Blocklist): Slot[] {
-  const clean2 = (list: string[]) => list.filter((o) => !block.blocks(o));
-  const slots: Slot[] = [];
-  span.forEach((w, s) => {
-    if (!lex.swappable(w.w)) return;
-    const one = lex.options([w.w]);
-    const exact = clean2(one.exact);
-    // Near misses only where exact options are scarce.
-    const near = exact.length < 3 ? clean2(one.near) : [];
-    if (exact.length || near.length) slots.push({ id: "", s, n: 1, said: w.w, exact, near });
-    // Re-split two adjacent words, unless punctuation sits between them.
-    const next = span[s + 1];
-    if (next && lex.swappable(next.w) && !/[.,!?;:]$/.test(w.p)) {
-      const two = clean2(lex.options([w.w, next.w], 15).exact);
-      if (two.length) slots.push({ id: "", s, n: 2, said: `${w.w} ${next.w}`, exact: two, near: [] });
-    }
-  });
-  return slots.slice(0, 22).map((sl, k) => ({ ...sl, id: `s${k}` }));
-}
-
-function rankPhrases(words: Word[], lex: Lexicon, block: Blocklist, duration: number): Ranked[] {
-  const seen = new Set<string>();
-  const out: Ranked[] = [];
-  for (const span of spans(words)) {
-    const key = `${span[0].s}-${span.length}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (block.blocks(span.map((w) => w.p).join(" "))) continue;
-    const slots = slotsFor(span, lex, block);
-    if (!slots.length) continue;
-    // Favour phrases where most words can change, near the 5 s target length.
-    const covered = new Set<number>();
-    slots.forEach((sl) => sl.exact.length && [...Array(sl.n).keys()].forEach((d) => covered.add(sl.s + d)));
-    const coverage = covered.size / span.length;
-    const score = coverage * 40 + covered.size * 3 + lengthFit(span) * 25;
-    out.push({ phrase: toPhrase(span, duration), slots, score });
-  }
-  return out.sort((a, b) => b.score - a.score);
-}
-
-/**
- * Opus writes whole lines; the browser checks each against the lips (Lexicon.check) and the
- * blocklist. Lines that don't fit go back once with exactly which chunks failed, for small fixes.
- */
-async function writeAlibis(r: Ranked, lex: Lexicon, block: Blocklist): Promise<Alibi[]> {
-  const said = r.phrase.words.map((w) => w.w);
-  const base = {
-    said: caption(r.phrase.words.map((w) => w.p)),
-    words: lex.describe(said),
-    hints: r.slots.map((s) => ({ said: s.said, options: s.exact.slice(0, 8) })),
-  };
-  const accepted: { text: string; marks: number[]; changed: number }[] = [];
-  let feedback: { line: string; problems: { said: string; wrote: string }[]; unknown: string[] }[] | undefined;
-
-  for (let round = 0; round < 2 && accepted.length < 2; round++) {
-    status(round === 0 ? "Writing your alibi… this takes about half a minute." : "Nudging the lines to fit your lips…");
-    const data = await api("/api/alibi", JSON.stringify(feedback ? { ...base, feedback } : base), "application/json");
-    feedback = [];
-    for (const line of (data.lines ?? []) as string[]) {
-      const tokens = String(line).split(/\s+/).filter((t) => clean(t));
-      if (!tokens.length) continue;
-      const text = caption(tokens);
-      const chk = lex.check(said, tokens);
-      // Must fit the lips, be clean, and actually change something.
-      if (chk.ok && chk.changedSaid > 0 && !block.blocks(text) && !accepted.some((x) => x.text === text)) {
-        accepted.push({ text, marks: chk.changed, changed: chk.changedSaid });
-      } else if (!chk.ok) {
-        feedback.push({ line: text, problems: chk.problems, unknown: chk.unknown });
-      }
-    }
-    console.log("alibi round", round + 1, JSON.stringify({ said, accepted: accepted.map((x) => x.text), failed: feedback }));
-  }
-  // Prefer the lines that changed the most.
-  accepted.sort((x, y) => y.changed - x.changed);
-  return accepted.slice(0, 2).map((x) => ({ swaps: [], marks: x.marks, text: x.text }));
-}
-
-/** Replace a punctuated word, keeping its capitalisation and trailing punctuation. */
-function swapCase(orig: string, repl: string): string {
-  const m = orig.match(/^([^A-Za-z']*)([A-Za-z']+)(.*)$/);
-  if (!m) return repl;
-  const [, pre, core, post] = m;
-  const r = /^[A-Z]/.test(core) ? repl[0].toUpperCase() + repl.slice(1) : repl;
-  return pre + r + post;
-}
-
-const caption = (tokens: string[]) => {
-  const s = tokens.join(" ").replace(/[,;:–—-]+$/, "");
-  return s[0].toUpperCase() + s.slice(1);
-};
-
 // ---------- reveal + caption toggle ----------
 
 let selected = 0; // 0 = original, 1..n = alibis
@@ -316,10 +251,36 @@ function captionFor(n: number): string {
   return n === 0 ? result.original : result.alibis[n - 1].text;
 }
 
+function cuesFor(n: number): Cue[] {
+  if (!result) return [];
+  return n === 0 ? result.originalCues : result.alibis[n - 1].cues;
+}
+
+// Subtitles follow the playhead: each one shows while the mouth makes those words.
+player.onTime = (t) => {
+  const el = $("caption");
+  const text = cueAt(cuesFor(selected), t);
+  if (el.textContent !== text) el.textContent = text;
+};
+
+/** Briefly replace the "writing" note with a message, then hide it. */
+function flashNote(text: string) {
+  const el = $("upgrade-note");
+  el.lastChild!.textContent = text;
+  el.classList.add("arrived");
+  el.hidden = false;
+  setTimeout(() => {
+    el.hidden = true;
+    el.classList.remove("arrived");
+    el.lastChild!.textContent = "Writing funnier ones…";
+  }, 4000);
+}
+
 function buildToggle() {
   const box = $("toggle");
   box.replaceChildren();
   if (!result) return;
+  if (selected > result.alibis.length) selected = 0;
   const opts = [{ label: "What you said", text: result.original, marks: [] as number[] }].concat(
     result.alibis.map((a, n) => ({ label: `Alibi ${n + 1}`, text: a.text, marks: a.marks ?? [] })),
   );
@@ -352,7 +313,7 @@ function buildToggle() {
 }
 
 function setCaption() {
-  showCaption($("caption"), captionFor(selected));
+  showCaption($("caption"), cueAt(cuesFor(selected), player.time));
 }
 
 /** Swap caption text immediately; the CSS animation is only a brief fade-in. */
@@ -394,13 +355,13 @@ async function initPresenter() {
   $("p-reveal").addEventListener("click", () => {
     if (!result || selected === 0) return;
     screenState = "alibi";
-    send?.({ t: "caption", caption: captionFor(selected) });
+    send?.({ t: "caption", cues: cuesFor(selected) });
     updatePresenter();
   });
   $("p-back").addEventListener("click", () => {
     if (!result) return;
     screenState = "original";
-    send?.({ t: "caption", caption: result.original });
+    send?.({ t: "caption", cues: result.originalCues });
     updatePresenter();
   });
   $("p-hold").addEventListener("click", () => {
@@ -411,12 +372,11 @@ async function initPresenter() {
   $("p-save").addEventListener("click", saveSample);
 }
 
-let shownCaption = "";
 function resendScreen() {
   if (!send) return;
   if (screenState === "hold" || !result) return send({ t: "hold" });
-  shownCaption = screenState === "alibi" && selected > 0 ? captionFor(selected) : result.original;
-  send({ t: "show", clip: result.clip, start: result.phrase.start, end: result.phrase.end, caption: shownCaption });
+  const cues = screenState === "alibi" && selected > 0 ? cuesFor(selected) : result.originalCues;
+  send({ t: "show", clip: result.clip, start: result.phrase.start, end: result.phrase.end, cues });
 }
 
 function updatePresenter() {
@@ -439,6 +399,7 @@ function saveSample() {
     start: result.phrase.start,
     end: result.phrase.end,
     original: result.original,
+    originalCues: result.originalCues,
     alibis: result.alibis,
   };
   download(result.clip, `clip.${ext}`);
@@ -468,20 +429,27 @@ function initScreen() {
   const screenPlayer = new LoopPlayer($<HTMLVideoElement>("screen-player"));
   const cap = $("screen-caption");
   let lastClip: Blob | null = null;
+  let cues: Cue[] = [];
+  screenPlayer.onTime = (t) => {
+    const text = cueAt(cues, t);
+    if (cap.textContent !== text) cap.textContent = text;
+  };
   const post = channel(async (m) => {
     if (m.t === "hold") {
       screenPlayer.stop();
       lastClip = null;
       setView("hold");
     } else if (m.t === "show") {
-      cap.textContent = m.caption;
+      cues = m.cues;
+      cap.textContent = cueAt(cues, screenPlayer.time);
       setView("project");
       if (m.clip !== lastClip) {
         lastClip = m.clip;
         await screenPlayer.load(m.clip, m.start, m.end);
       }
     } else if (m.t === "caption") {
-      showCaption(cap, m.caption);
+      cues = m.cues;
+      showCaption(cap, cueAt(cues, screenPlayer.time));
     }
   });
   post({ t: "hello" });
@@ -501,13 +469,16 @@ async function loadSample() {
     });
     const clip = await fetch(`/sample/${meta.clip}`).then((r) => r.blob());
     const ws = (meta.original as string).split(" ").map((p, i) => ({ w: p, p, s: i, e: i }));
+    const whole = (text: string): Cue[] => [{ start: meta.start, end: meta.end, text }];
     result = {
       clip,
       phrase: { words: ws, start: meta.start, end: meta.end },
       original: meta.original,
-      alibis: meta.alibis,
+      originalCues: meta.originalCues ?? whole(meta.original),
+      alibis: (meta.alibis as Alibi[]).map((a) => ({ ...a, cues: a.cues ?? whole(a.text) })),
     };
     $("reveal-hint").textContent = "A sample clip, recorded with permission. Same footage, same speed, no sound.";
+    $("upgrade-note").hidden = true;
     await reveal();
   } catch {
     fail("Sample not ready", "The sample clip isn't available yet. Record your own instead.");
