@@ -1,4 +1,6 @@
-# Your Mouth Has an Alibi
+# Lip Service
+
+*Your mouth has an alibi.*
 
 **Phase 1 ships a silent illusion.** Scan the QR, record an answer and toggle two captions over identical footage. Target under a minute from scan to reveal. The crowd experience stays captions-only. The 11am audience test decides whether to build a stage dub. One-word-to-two-word splits (“carpet” → “car pit”) are stretch only.
 
