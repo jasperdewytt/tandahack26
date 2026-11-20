@@ -54,12 +54,15 @@ async function transcribe(req: Request, env: Env): Promise<Response> {
       body: media,
     });
   let dg = await send().catch(() => null);
-  if (!dg || dg.status === 429 || dg.status >= 500) dg = await send().catch(() => null);
+  if (!dg || dg.status === 429 || dg.status >= 500) {
+    await new Promise((r) => setTimeout(r, 1500)); // back off before the one retry
+    dg = await send().catch(() => null);
+  }
   if (!dg || !dg.ok) {
     const detail = dg ? (await dg.text()).slice(0, 300) : "network";
     console.log("deepgram failed", dg?.status, detail);
     return json(
-      { error: "deepgram", status: dg?.status, detail, message: "Transcription didn't go through. Tap Retake to try again." },
+      { error: "deepgram", status: dg?.status, detail, message: `Transcription didn't go through (code ${dg?.status ?? "network"}). Tap Retake to try again.` },
       502,
     );
   }

@@ -150,7 +150,10 @@ async function process(take: Take) {
     status(take.audio ? "Listening back…" : "Your phone saved one file, so the whole clip is uploading for transcription…");
     const type = upload.type || "application/octet-stream";
     // One automatic retry: a transcription hiccup should never reach the person.
-    const tr = await api("/api/transcribe", upload, type).catch(() => api("/api/transcribe", upload, type));
+    const tr = await api("/api/transcribe", upload, type).catch(async () => {
+      await new Promise((r) => setTimeout(r, 2000));
+      return api("/api/transcribe", upload, type);
+    });
     const words: Word[] = tr.words ?? [];
     if (words.length < 2) throw new Retake("We didn't catch that", "Speak up and answer in a full sentence, facing the camera.");
 
