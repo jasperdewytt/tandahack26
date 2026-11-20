@@ -148,7 +148,9 @@ async function process(take: Take) {
   try {
     const upload = take.audio ?? take.video;
     status(take.audio ? "Listening back…" : "Your phone saved one file, so the whole clip is uploading for transcription…");
-    const tr = await api("/api/transcribe", upload, upload.type || "application/octet-stream");
+    const type = upload.type || "application/octet-stream";
+    // One automatic retry: a transcription hiccup should never reach the person.
+    const tr = await api("/api/transcribe", upload, type).catch(() => api("/api/transcribe", upload, type));
     const words: Word[] = tr.words ?? [];
     if (words.length < 2) throw new Retake("We didn't catch that", "Speak up and answer in a full sentence, facing the camera.");
 
@@ -219,7 +221,7 @@ function slotsFor(span: Word[], lex: Lexicon, block: Blocklist): Slot[] {
     // Re-split two adjacent words, unless punctuation sits between them.
     const next = span[s + 1];
     if (next && lex.swappable(next.w) && !/[.,!?;:]$/.test(w.p)) {
-      const two = clean2(lex.options([w.w, next.w], 12).exact);
+      const two = clean2(lex.options([w.w, next.w], 15).exact);
       if (two.length) slots.push({ id: "", s, n: 2, said: `${w.w} ${next.w}`, exact: two, near: [] });
     }
   });

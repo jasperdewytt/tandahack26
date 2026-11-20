@@ -12,9 +12,10 @@ const PROTECTED = new Set(["P", "F", "W"]);
 const VOWELISH = ["A", "E", "O", "I", "U"];
 const CONSONANTISH = ["D", "T", "L", "K", "J", "R"];
 
-// Fillers and one-letter words are never swapped.
+// Fillers, interjections and one-letter words are never swapped (they turned into "Owe", "Aw").
 const PAIR_RANK = 6000;
-const SKIP = new Set(["um", "uh", "erm", "hmm", "mm", "a", "i"]);
+const SINGLE_RANK = 20000;
+const SKIP = new Set(["um", "uh", "erm", "hmm", "mm", "a", "i", "oh", "ah", "aw", "yeah", "yep", "okay", "ok", "well", "like", "so", "just", "um"]);
 
 export class Lexicon {
   forward = new Map<string, Entry>();
@@ -56,7 +57,7 @@ export class Lexicon {
    * whose combined mouth-shape sequence and syllable count match exactly, plus (single words
    * only) near misses one shape off. Most common words first.
    */
-  options(span: string[], maxExact = 15, maxNear = 6): SpanOptions {
+  options(span: string[], maxExact = 20, maxNear = 6): SpanOptions {
     const ws = span.map(clean);
     const entries = ws.map((w) => this.forward.get(w));
     if (entries.some((e) => !e)) return { exact: [], near: [] };
@@ -66,8 +67,9 @@ export class Lexicon {
     const sameAsSpoken = (o: string) => o === original || (ws.length === 1 && sameStem(o, ws[0]));
     const r = (w: string) => this.rank.get(w) ?? 1e9;
 
-    // Single words with the same shapes.
-    const singles = this.words(key, syl).filter((w) => !sameAsSpoken(w));
+    // Single words with the same shapes; rare words (mostly names and oddities) are left out
+    // so Sonnet builds lines from words people actually say.
+    const singles = this.words(key, syl).filter((w) => !sameAsSpoken(w) && r(w) < SINGLE_RANK);
 
     // Two-word re-splits. The boundary shape may be shared ("bat" + "top" ~ "battop").
     const pairs: { text: string; score: number }[] = [];
@@ -111,7 +113,7 @@ export class Lexicon {
           if (sub === c) continue;
           const k = collapse(e.key.slice(0, i) + sub + e.key.slice(i + 1));
           for (const cand of this.words(k, e.syl)) {
-            if (!seen.has(cand) && !sameAsSpoken(cand)) {
+            if (!seen.has(cand) && !sameAsSpoken(cand) && r(cand) < SINGLE_RANK) {
               seen.add(cand);
               near.push(cand);
             }

@@ -86,9 +86,9 @@ const SYSTEM = `You write captions for "Lip Service", a party game. A person was
 You get the phrase as a words array, and "slots": each slot covers one or two adjacent spoken words ("said") and lists text that makes the same mouth shapes. An option can be one word or two words, so a slot can re-split the sounds ("water bottle" -> "what a bottle"). "exact" options look identical on the lips. "near" options are one mouth shape off: use at most ONE near option per alibi. Slots can overlap; never use two slots that cover the same spoken word.
 
 Write the TWO funniest alibis, in the style of Bad Lip Reading (the YouTube channel): the person confidently says something oddly specific, a bit random and surreal, but every line is still a real sentence with a meaning you could picture.
-- Change a lot: aim for most of the spoken words, so it reads as a genuinely different line, not a tweak. Re-splits and small words ("my" -> "by", "and" -> "at") help.
-- It must parse as English a person could say: grammatical, with a clear (absurd is fine) meaning. Random is good; word salad is not. If a swap breaks the grammar ("I prawns by water"), keep that word as spoken.
-- Try several candidate lines, then pick the two best. Use only options copied exactly from a slot's lists; words you don't cover stay as spoken. Before answering, check every swap's "words" appears verbatim in that slot's list and that no two used slots cover the same spoken word.
+- Sense comes first. Read each finished caption aloud in your head: it must be a sentence a real person could plausibly say, with a meaning someone could picture (absurd is fine). Every phrase must work grammatically on its own: "my kids" yes, "bye kids" in a list of belongings no; "a pink monk" yes, "buy laptop" no. Random is good; nonsense is not.
+- Within that, change as many spoken words as you can, usually four or more, so it reads as a genuinely different line. Re-splits and small words ("my" -> "by", "and" -> "at") help, but only where the grammar still works. Keep a word as spoken rather than force a swap that breaks the sentence.
+- Try several candidate lines, score each on "makes sense", "funny" and "how much changed", then pick the two best. Use only options copied exactly from a slot's lists; words you don't cover stay as spoken. Before answering, check every swap's "words" appears verbatim in that slot's list and that no two used slots cover the same spoken word.
 - The joke must land from reading the caption alone, in silence: an absurdly specific scenario, a sudden change of implication, or mild innuendo. Keep it mild: nothing hateful, sexually explicit, or cruel about the speaker.
 - The two alibis should be different jokes.
 - Output only "swaps" for each alibi: every slot you used, by its "id", with the option text in "words".`;
@@ -138,7 +138,7 @@ async function alibi(req: Request, env: Env): Promise<Response> {
   const slots = (body.slots ?? []).slice(0, 22).map((s) => ({
     id: String(s.id).slice(0, 6),
     said: String(s.said).slice(0, 40),
-    exact: (s.exact ?? []).slice(0, 15).map((w) => String(w).slice(0, 40)),
+    exact: (s.exact ?? []).slice(0, 20).map((w) => String(w).slice(0, 40)),
     near: (s.near ?? []).slice(0, 6).map((w) => String(w).slice(0, 40)),
   }));
   if (!phrase.length || !slots.length) return json({ error: "empty" }, 400);
