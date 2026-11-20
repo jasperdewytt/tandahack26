@@ -45,8 +45,14 @@ else {
   loadData().catch(() => {});
   if (path === "/stage") initPresenter();
   else if (path === "/sample") loadSample();
+  // The SPA fallback answers 200 with HTML for missing files, so check the type too.
   fetch("/sample/sample.json", { method: "HEAD" })
-    .then((r) => r.ok && (($("sample-wrap").hidden = false), ($("fail-sample").hidden = false)))
+    .then((r) => {
+      if (r.ok && (r.headers.get("content-type") ?? "").includes("json")) {
+        $("sample-wrap").hidden = false;
+        $("fail-sample").hidden = false;
+      }
+    })
     .catch(() => {});
 }
 
@@ -239,7 +245,7 @@ function swapCase(orig: string, repl: string): string {
 }
 
 const caption = (ws: Word[]) => {
-  const s = ws.map((w) => w.p).join(" ");
+  const s = ws.map((w) => w.p).join(" ").replace(/[,;:–—-]+$/, "");
   return s[0].toUpperCase() + s.slice(1);
 };
 
@@ -300,13 +306,15 @@ function buildToggle() {
 }
 
 function setCaption() {
-  const el = $("caption");
-  const text = captionFor(selected);
+  showCaption($("caption"), captionFor(selected));
+}
+
+/** Swap caption text immediately; the CSS animation is only a brief fade-in. */
+function showCaption(el: HTMLElement, text: string) {
+  el.textContent = text;
+  el.classList.remove("swap");
+  void el.offsetWidth; // restart the animation
   el.classList.add("swap");
-  requestAnimationFrame(() => {
-    el.textContent = text;
-    el.classList.remove("swap");
-  });
 }
 
 function fail(title: string, msg: string) {
@@ -427,11 +435,7 @@ function initScreen() {
         await screenPlayer.load(m.clip, m.start, m.end);
       }
     } else if (m.t === "caption") {
-      cap.classList.add("swap");
-      requestAnimationFrame(() => {
-        cap.textContent = m.caption;
-        cap.classList.remove("swap");
-      });
+      showCaption(cap, m.caption);
     }
   });
   post({ t: "hello" });

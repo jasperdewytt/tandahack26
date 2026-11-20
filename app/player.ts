@@ -14,6 +14,20 @@ export class LoopPlayer {
     video.setAttribute("playsinline", "");
     video.setAttribute("muted", "");
     video.playbackRate = 1;
+    // Backup for when requestAnimationFrame is throttled (background tab, low power).
+    video.addEventListener("timeupdate", () => this.check());
+    video.addEventListener("ended", () => this.check());
+  }
+
+  private active = false;
+
+  private check() {
+    if (!this.active) return;
+    const t = this.video.currentTime;
+    if (t >= this.end || this.video.ended || t < this.start - 0.25) {
+      this.video.currentTime = this.start;
+      if (this.video.paused) this.video.play().catch(() => {});
+    }
   }
 
   async load(clip: Blob | string, start = 0, end = Infinity) {
@@ -37,12 +51,9 @@ export class LoopPlayer {
     this.video.play().catch(() => {
       /* autoplay can be refused until a tap; the next user gesture retries */
     });
+    this.active = true;
     const tick = () => {
-      const t = this.video.currentTime;
-      if (t >= this.end || this.video.ended || t < this.start - 0.25) {
-        this.video.currentTime = this.start;
-        if (this.video.paused) this.video.play().catch(() => {});
-      }
+      this.check();
       this.raf = requestAnimationFrame(tick);
     };
     cancelAnimationFrame(this.raf);
@@ -50,6 +61,7 @@ export class LoopPlayer {
   }
 
   stop() {
+    this.active = false;
     cancelAnimationFrame(this.raf);
     this.video.pause();
   }

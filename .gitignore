@@ -9,3 +9,4 @@ public/app.js
 public/app.js.map
 .wrangler/
 scripts/.cache/
+public/dev/
