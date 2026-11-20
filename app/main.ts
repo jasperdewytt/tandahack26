@@ -43,8 +43,12 @@ let send: ((m: StageMsg) => void) | null = null;
 if (path === "/screen") initScreen();
 else {
   loadData().catch(() => {});
-  if (path === "/stage") initPresenter();
-  else if (path === "/sample") loadSample();
+  if (path === "/stage") {
+    // /stage?k=…&sample puts the sample clip straight into the presenter flow.
+    initPresenter().then(() => {
+      if (new URLSearchParams(location.search).has("sample")) loadSample();
+    });
+  } else if (path === "/sample") loadSample();
   // The SPA fallback answers 200 with HTML for missing files, so check the type too.
   fetch("/sample/sample.json", { method: "HEAD" })
     .then((r) => {

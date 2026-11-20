@@ -222,7 +222,8 @@ main:is([data-view="hold"], [data-view="project"]) { max-width: none; padding: 0
 }
 .mark.big { font-size: clamp(4rem, 12vw, 12rem); margin: 0; }
 .tagline.big { font-size: clamp(1.5rem, 3.2vw, 3.2rem); color: var(--powder); margin: 1rem 0 0; }
-.qr-wrap { text-align: center; grid-column: 2; grid-row: 1 / span 2; }
+.tagline.join { font-weight: 400; font-size: clamp(1.1rem, 2vw, 2rem); margin-top: 3vw; max-width: 22em; }
+.qr-wrap { text-align: center; }
 #qr { background: var(--white); padding: 1.2rem; border-radius: 1rem; line-height: 0; }
 #qr svg { width: min(28vw, 22rem); height: auto; }
 #qr-url { font-size: clamp(1rem, 1.6vw, 1.6rem); margin: 1rem 0 0; color: var(--powder); }
