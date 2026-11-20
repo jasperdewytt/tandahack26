@@ -70,15 +70,17 @@ interface AlibiReq {
   slots: { i: number; word: string; exact: string[]; near: string[] }[];
 }
 
-const SYSTEM = `You write captions for "Lip Service", a party game. A person was filmed saying a short phrase. The clip loops on screen MUTED. We swap exactly one word in the caption for a word the speaker's mouth visibly also fits, so viewers believe the person silently said the new line.
+const SYSTEM = `You write captions for "Lip Service", a party game. A person was filmed saying a phrase. The clip loops on screen MUTED. We rewrite the caption using only words the speaker's mouth visibly also fits, so viewers believe the person silently said a completely different line.
 
-You get the phrase and, for some word positions ("slots", indexed by "i" into the words array), lists of lip-compatible replacement words. "exact" words look identical on the lips. "near" words are one mouth shape off, so only use one when it is much funnier than any exact option.
+You get the phrase as a words array and, for each content word ("slots", where "i" indexes into the words array), lists of lip-compatible replacements. "exact" words look identical on the lips. "near" words are one mouth shape off: use at most ONE near word per alibi. Words that are not slots (the, my, and, I...) stay exactly as they are.
 
-Pick the TWO funniest single-word swaps:
-- Change exactly one word per swap, using a word copied exactly from that slot's lists.
-- The new caption must be a grammatical, natural sentence a person might actually say.
-- The joke must land from reading the caption alone, in silence: an absurdly specific detail, a sudden change of implication, or mild innuendo. Keep it mild: nothing hateful, sexually explicit, or cruel about the speaker.
-- Make the two swaps different jokes, in different slots when possible.`;
+Write the TWO funniest alibis:
+- Replace as many slots as you can, each with a word copied exactly from that slot's lists. Keep an original word (leave it out of "swaps") when no option makes sense.
+- Most important: the result must be ONE coherent, grammatical sentence that a real person might plausibly say out loud, with a clear meaning. A sensible line with fewer swaps beats a nonsense line with more. Never output word salad like "a pick punk of tongues".
+- Each "slot" in swaps is the slot's "i" value (its position in the words array), not its order in the slots list.
+- The joke must land from reading the caption alone, in silence: an absurdly specific scenario, a sudden change of implication, or mild innuendo. Keep it mild: nothing hateful, sexually explicit, or cruel about the speaker.
+- The two alibis should be different jokes.
+- "line" is the full new caption; "swaps" lists every replaced slot.`;
 
 const SCHEMA = {
   type: "object",
@@ -87,8 +89,19 @@ const SCHEMA = {
       type: "array",
       items: {
         type: "object",
-        properties: { slot: { type: "integer" }, word: { type: "string" } },
-        required: ["slot", "word"],
+        properties: {
+          line: { type: "string" },
+          swaps: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { slot: { type: "integer" }, word: { type: "string" } },
+              required: ["slot", "word"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["line", "swaps"],
         additionalProperties: false,
       },
     },
@@ -100,7 +113,7 @@ const SCHEMA = {
 async function alibi(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const len = Number(req.headers.get("content-length") ?? "0");
-  if (len > 16_000) return json({ error: "too_big" }, 413);
+  if (len > 24_000) return json({ error: "too_big" }, 413);
   const rl = await limited(req, env.RL_AI_IP, env.RL_AI_ALL);
   if (rl) return rl;
 
@@ -111,12 +124,12 @@ async function alibi(req: Request, env: Env): Promise<Response> {
     return json({ error: "bad_json" }, 400);
   }
   // Bound the prompt regardless of what the client sends.
-  const phrase = (body.phrase ?? []).slice(0, 14).map((w) => String(w).slice(0, 30));
-  const slots = (body.slots ?? []).slice(0, 8).map((s) => ({
+  const phrase = (body.phrase ?? []).slice(0, 16).map((w) => String(w).slice(0, 30));
+  const slots = (body.slots ?? []).slice(0, 12).map((s) => ({
     i: Number(s.i),
     word: String(s.word).slice(0, 30),
-    exact: (s.exact ?? []).slice(0, 40).map((w) => String(w).slice(0, 30)),
-    near: (s.near ?? []).slice(0, 25).map((w) => String(w).slice(0, 30)),
+    exact: (s.exact ?? []).slice(0, 20).map((w) => String(w).slice(0, 30)),
+    near: (s.near ?? []).slice(0, 8).map((w) => String(w).slice(0, 30)),
   }));
   if (!phrase.length || !slots.length) return json({ error: "empty" }, 400);
 
@@ -128,7 +141,8 @@ async function alibi(req: Request, env: Env): Promise<Response> {
       model: MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
       thinking: { type: "between_tools" },
-      output_config: { effort: "low", format: { type: "json_schema", schema: SCHEMA } },
+      // Medium effort: making every swap fit one coherent sentence is harder than a single swap.
+      output_config: { effort: "medium", format: { type: "json_schema", schema: SCHEMA } },
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       system: SYSTEM,
@@ -143,8 +157,14 @@ async function alibi(req: Request, env: Env): Promise<Response> {
       /* invalid output: return nothing and let the client offer a retake */
     }
     const alibis = Array.isArray(parsed?.alibis)
-      ? parsed.alibis.slice(0, 4).map((a: any) => ({ slot: Number(a.slot), word: String(a.word ?? "") }))
+      ? parsed.alibis.slice(0, 4).map((a: any) => ({
+          line: String(a.line ?? "").slice(0, 200),
+          swaps: (Array.isArray(a.swaps) ? a.swaps : [])
+            .slice(0, 12)
+            .map((s: any) => ({ slot: Number(s.slot), word: String(s.word ?? "").slice(0, 30) })),
+        }))
       : [];
+    // max_tokens cut-offs return invalid JSON above, so they surface as "no alibi" rather than half a caption.
     return json({ alibis, usage: { in: res.usage?.input_tokens, out: res.usage?.output_tokens } });
   } catch (e) {
     if (e instanceof Anthropic.RateLimitError) return json({ error: "busy", message: "Lots of people are playing right now. Try again in a minute." }, 429);

@@ -3,7 +3,7 @@ import { openCamera, Recorder, type Take } from "./capture";
 import { LoopPlayer } from "./player";
 import { Lexicon, clean } from "./lexicon";
 import { Blocklist } from "./blocklist";
-import { spans, toPhrase, type Word, type Phrase } from "./phrase";
+import { spans, toPhrase, lengthFit, type Word, type Phrase } from "./phrase";
 import { channel, type StageMsg } from "./stage";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -16,7 +16,11 @@ const path = location.pathname.replace(/\/+$/, "") || "/";
 
 // ---------- shared state ----------
 
-interface Alibi { i: number; word: string; text: string; near: boolean }
+interface Alibi {
+  swaps: { i: number; word: string }[];
+  marks: number[]; // word positions in `text` that changed (for highlighting)
+  text: string;
+}
 interface Result {
   clip: Blob;
   phrase: Phrase;
@@ -207,14 +211,24 @@ function rankPhrases(words: Word[], lex: Lexicon, block: Blocklist, duration: nu
     if (seen.has(id)) continue;
     seen.add(id);
     if (block.blocks(span.map((w) => w.p).join(" "))) continue;
+    // Smaller lists per slot now that every content word gets swapped (keeps the prompt bounded).
     const slots = span
-      .map((w, i) => ({ i, word: w.w, ...lex.candidates(w.w) }))
+      .map((w, i) => ({ i, word: w.w, ...lex.candidates(w.w, 20, 8) }))
       .filter((s) => lex.isContent(s.word) && (s.exact.length || s.near.length))
-      .map((s) => ({ ...s, exact: s.exact.filter((c) => !block.blocks(c)), near: s.near.filter((c) => !block.blocks(c)) }));
+      .map((s) => {
+        const exact = s.exact.filter((c) => !block.blocks(c));
+        // Offer near misses only where exact options are scarce.
+        const near = exact.length < 3 ? s.near.filter((c) => !block.blocks(c)) : [];
+        return { ...s, exact, near };
+      })
+      .filter((s) => s.exact.length || s.near.length)
+      .slice(0, 12);
     if (!slots.length) continue;
-    const richness = slots.reduce((n, s) => n + Math.min(s.exact.length, 12) * 2 + Math.min(s.near.length, 6), 0);
-    const sizeBonus = span.length >= 3 && span.length <= 6 ? 8 : 0;
-    out.push({ phrase: toPhrase(span, duration), slots: slots.slice(0, 6), score: richness + sizeBonus });
+    // Favour phrases with many swappable words (exact ones most), near the 5 s target length.
+    const withExact = slots.filter((s) => s.exact.length).length;
+    const richness = slots.reduce((n, s) => n + Math.min(s.exact.length, 10) * 0.3 + Math.min(s.near.length, 5) * 0.1, 0);
+    const score = withExact * 10 + slots.length * 4 + richness + lengthFit(span) * 25;
+    out.push({ phrase: toPhrase(span, duration), slots, score });
   }
   return out.sort((a, b) => b.score - a.score);
 }
@@ -224,17 +238,31 @@ async function askSonnet(r: Ranked, block: Blocklist): Promise<Alibi[]> {
   const payload = { phrase: words.map((w) => w.p), slots: r.slots };
   const data = await api("/api/alibi", JSON.stringify(payload), "application/json");
   const out: Alibi[] = [];
+  const minSwaps = Math.min(2, r.slots.length);
   for (const a of data.alibis ?? []) {
-    const slot = r.slots.find((s) => s.i === a.slot);
-    const word = clean(String(a.word));
-    if (!slot || !word) continue;
-    const exact = slot.exact.includes(word);
-    if (!exact && !slot.near.includes(word)) continue; // not from the lip-checked list
-    if (block.blocks(word)) continue;
-    const swapped = words.map((w, i) => (i === a.slot ? { ...w, p: swapCase(w.p, word) } : w));
+    // Every swap must come from that slot's lip-checked list, one per slot, with at most
+    // one near miss in the whole alibi. Sonnet composed the line as a whole, so one bad
+    // swap rejects the whole alibi rather than leaving a half-changed sentence.
+    const swaps: { i: number; word: string }[] = [];
+    let nearCount = 0;
+    let valid = true;
+    for (const sw of a.swaps ?? []) {
+      const slot = r.slots.find((s) => s.i === sw.slot);
+      const word = clean(String(sw.word));
+      if (slot && word === clean(slot.word)) continue; // "kept" word, not a swap
+      if (!slot || !word || swaps.some((x) => x.i === slot.i) || block.blocks(word)) { valid = false; break; }
+      if (slot.near.includes(word) && !slot.exact.includes(word)) nearCount++;
+      else if (!slot.exact.includes(word)) { valid = false; break; }
+      swaps.push({ i: slot.i, word });
+    }
+    if (!valid || nearCount > 1 || swaps.length < minSwaps) continue;
+    const swapped = words.map((w, i) => {
+      const sw = swaps.find((x) => x.i === i);
+      return sw ? { ...w, p: swapCase(w.p, sw.word) } : w;
+    });
     const text = caption(swapped);
     if (block.blocks(text) || out.some((o) => o.text === text)) continue;
-    out.push({ i: a.slot, word, text, near: !exact });
+    out.push({ swaps, marks: swaps.map((s) => s.i), text });
     if (out.length === 2) break;
   }
   return out;
@@ -279,8 +307,8 @@ function buildToggle() {
   const box = $("toggle");
   box.replaceChildren();
   if (!result) return;
-  const opts = [{ label: "What you said", text: result.original, mark: -1 }].concat(
-    result.alibis.map((a, n) => ({ label: `Alibi ${n + 1}`, text: a.text, mark: a.i })),
+  const opts = [{ label: "What you said", text: result.original, marks: [] as number[] }].concat(
+    result.alibis.map((a, n) => ({ label: `Alibi ${n + 1}`, text: a.text, marks: a.marks ?? [] })),
   );
   opts.forEach((o, n) => {
     const b = document.createElement("button");
@@ -289,11 +317,11 @@ function buildToggle() {
     const label = document.createElement("b");
     label.textContent = o.label;
     b.append(label);
-    // Underline the swapped word so the change is easy to spot.
+    // Underline the swapped words so the changes are easy to spot.
     const words = o.text.split(" ");
     words.forEach((w, i) => {
       if (i) b.append(" ");
-      if (i === o.mark) {
+      if (o.marks.includes(i)) {
         const m = document.createElement("mark");
         m.textContent = w;
         b.append(m);
