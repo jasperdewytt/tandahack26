@@ -238,24 +238,24 @@ async function askSonnet(r: Ranked, block: Blocklist): Promise<Alibi[]> {
   const payload = { phrase: words.map((w) => w.p), slots: r.slots };
   const data = await api("/api/alibi", JSON.stringify(payload), "application/json");
   const out: Alibi[] = [];
-  const minSwaps = Math.min(2, r.slots.length);
+  const minSwaps = 1;
   for (const a of data.alibis ?? []) {
     // Every swap must come from that slot's lip-checked list, one per slot, with at most
-    // one near miss in the whole alibi. Sonnet composed the line as a whole, so one bad
-    // swap rejects the whole alibi rather than leaving a half-changed sentence.
+    // one near miss in the whole alibi. A swap that breaks a rule reverts to the original
+    // word (still lip-true) instead of sinking the whole alibi.
     const swaps: { i: number; word: string }[] = [];
-    let nearCount = 0;
-    let valid = true;
+    let nearUsed = false;
     for (const sw of a.swaps ?? []) {
       const slot = r.slots.find((s) => s.i === sw.slot);
       const word = clean(String(sw.word));
-      if (slot && word === clean(slot.word)) continue; // "kept" word, not a swap
-      if (!slot || !word || swaps.some((x) => x.i === slot.i) || block.blocks(word)) { valid = false; break; }
-      if (slot.near.includes(word) && !slot.exact.includes(word)) nearCount++;
-      else if (!slot.exact.includes(word)) { valid = false; break; }
-      swaps.push({ i: slot.i, word });
+      if (!slot || !word || word === clean(slot.word) || swaps.some((x) => x.i === slot.i) || block.blocks(word)) continue;
+      if (slot.exact.includes(word)) swaps.push({ i: slot.i, word });
+      else if (slot.near.includes(word) && !nearUsed) {
+        nearUsed = true;
+        swaps.push({ i: slot.i, word });
+      }
     }
-    if (!valid || nearCount > 1 || swaps.length < minSwaps) continue;
+    if (swaps.length < minSwaps) continue;
     const swapped = words.map((w, i) => {
       const sw = swaps.find((x) => x.i === i);
       return sw ? { ...w, p: swapCase(w.p, sw.word) } : w;
