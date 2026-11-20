@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Lip Service</title>
+  <meta name="description" content="Lip Service: your mouth has an alibi. Record a line and see what else your lips could have said.">
+  <meta name="theme-color" content="#F9E4E7">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M4 32c8-12 18-16 28-10 10-6 20-2 28 10-8 14-18 20-28 20S12 46 4 32z' fill='%23D7193F'/%3E%3Cpath d='M8 32h48' stroke='%232B1530' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bagel+Fat+One&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main id="app" data-view="intro">
+
+    <!-- Crowd + presenter flow -->
+    <section class="view" data-for="intro">
+      <h1 class="mark">Lip Service</h1>
+      <p class="tagline">your mouth has an alibi</p>
+      <p class="lede">Answer one question on camera. We find words your lips could just as easily have said, then play your clip back on mute.</p>
+      <p class="question">What did you bring with you today?</p>
+      <label class="consent">
+        <input type="checkbox" id="consent">
+        <span>I agree to be recorded for about 10 seconds. The video stays on this phone. The sound goes to a transcription service and isn't kept.</span>
+      </label>
+      <button class="primary" id="start" disabled>Start recording</button>
+      <p class="aside" id="sample-wrap" hidden>No camera handy? <a href="/sample" id="sample-link">Try the sample clip</a>.</p>
+      <p class="aside" id="file-wrap">Camera won't open? <label class="linklike">Upload a short video<input type="file" id="file" accept="video/*" capture="user" hidden></label>.</p>
+    </section>
+
+    <section class="view" data-for="record">
+      <div class="frame">
+        <video id="live" playsinline muted autoplay></video>
+        <div class="rec-meter"><span id="rec-bar"></span></div>
+        <p class="rec-count" id="rec-count">10</p>
+      </div>
+      <p class="question">What did you bring with you today?</p>
+      <p class="hint">Talk naturally, a full sentence or two. Face the camera so your lips are clear.</p>
+      <button class="primary" id="stop">Stop</button>
+    </section>
+
+    <section class="view" data-for="work">
+      <div class="frame dim">
+        <video id="preview" playsinline muted loop></video>
+      </div>
+      <p class="status" id="status" role="status" aria-live="polite">Listening back…</p>
+    </section>
+
+    <section class="view" data-for="reveal">
+      <div class="frame" id="stage-frame">
+        <video id="player" playsinline muted></video>
+        <p class="caption" id="caption"></p>
+      </div>
+      <div class="toggle" id="toggle" role="radiogroup" aria-label="Caption"></div>
+      <p class="hint" id="reveal-hint">Same footage, same speed, no sound. Tap between captions and watch the mouth.</p>
+      <div class="presenter" id="presenter" hidden>
+        <p class="presenter-title">Big screen</p>
+        <div class="presenter-row">
+          <button id="p-send">Show original on screen</button>
+          <button id="p-reveal" disabled>Reveal selected alibi</button>
+          <button id="p-back" disabled>Back to original</button>
+          <button id="p-hold">Hold screen</button>
+          <button id="p-save">Save as sample</button>
+        </div>
+        <p class="hint" id="p-state">Screen is holding. <a href="/screen" target="_blank" rel="noopener">Open the screen tab</a> on the projector display.</p>
+      </div>
+      <button class="secondary" id="again">Record another</button>
+    </section>
+
+    <section class="view" data-for="fail">
+      <h2 class="fail-title" id="fail-title">No alibi this time</h2>
+      <p class="lede" id="fail-msg">Your lips were too honest. Try a longer answer with a few nouns in it.</p>
+      <button class="primary" id="retake">Retake</button>
+      <p class="aside" id="fail-sample" hidden><a href="/sample">Watch the sample instead</a>.</p>
+    </section>
+
+    <!-- Projector -->
+    <section class="view screen" data-for="hold">
+      <div class="hold">
+        <h1 class="mark big">Lip Service</h1>
+        <p class="tagline big">your mouth has an alibi</p>
+        <div class="qr-wrap"><div id="qr"></div><p id="qr-url"></p></div>
+      </div>
+    </section>
+
+    <section class="view screen" data-for="project">
+      <div class="screen-frame">
+        <video id="screen-player" playsinline muted></video>
+        <p class="caption huge" id="screen-caption"></p>
+      </div>
+    </section>
+
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
