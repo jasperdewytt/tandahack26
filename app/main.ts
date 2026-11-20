@@ -70,12 +70,13 @@ $("again").addEventListener("click", () => {
   player.stop();
   setView("intro");
 });
-$<HTMLInputElement>("file").addEventListener("change", (e) => {
-  const input = e.target as HTMLInputElement;
-  const f = input.files?.[0];
-  input.value = "";
-  if (f) process({ video: f, audio: null });
-});
+document.querySelectorAll<HTMLInputElement>(".file-pick").forEach((el) =>
+  el.addEventListener("change", () => {
+    const f = el.files?.[0];
+    el.value = "";
+    if (f) process({ video: f, audio: null });
+  }),
+);
 
 let recorder: Recorder | null = null;
 

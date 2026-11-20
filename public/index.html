@@ -27,7 +27,7 @@
       </label>
       <button class="primary" id="start" disabled>Start recording</button>
       <p class="aside" id="sample-wrap" hidden>No camera handy? <a href="/sample" id="sample-link">Try the sample clip</a>.</p>
-      <p class="aside" id="file-wrap">Camera won't open? <label class="linklike">Upload a short video<input type="file" id="file" accept="video/*" capture="user" hidden></label>.</p>
+      <p class="aside" id="file-wrap">Camera won't open? <label class="linklike">Upload a short video<input type="file" id="file" class="file-pick" accept="video/*" capture="user" hidden></label>.</p>
     </section>
 
     <section class="view" data-for="record">
@@ -73,6 +73,7 @@
       <h2 class="fail-title" id="fail-title">No alibi this time</h2>
       <p class="lede" id="fail-msg">Your lips were too honest. Try a longer answer with a few nouns in it.</p>
       <button class="primary" id="retake">Retake</button>
+      <p class="aside"><label class="linklike">Upload a short video instead<input type="file" class="file-pick" accept="video/*" capture="user" hidden></label>.</p>
       <p class="aside" id="fail-sample" hidden><a href="/sample">Watch the sample instead</a>.</p>
     </section>
 
