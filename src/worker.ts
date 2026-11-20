@@ -15,7 +15,9 @@ export interface Env {
 
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 const MODEL = "claude-sonnet-5-5";
-const MAX_OUTPUT_TOKENS = 400;
+// Thinking plus the answer. Raised from 400 after the phone test: without room to plan,
+// whole-line rewrites came out as word salad. ~US$0.02-0.03 per call; RL_AI_ALL caps the rate.
+const MAX_OUTPUT_TOKENS = 6000;
 
 const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), {
@@ -43,14 +45,23 @@ async function transcribe(req: Request, env: Env): Promise<Response> {
   const type = (req.headers.get("content-type") ?? "application/octet-stream").split(";")[0];
   // No smart_format: numbers stay as words so they can be looked up by pronunciation.
   const url = "https://api.deepgram.com/v1/listen?model=nova-3&language=en&punctuate=true&mip_opt_out=true";
-  const dg = await fetch(url, {
-    method: "POST",
-    headers: { authorization: `Token ${env.DEEPGRAM_API_KEY}`, "content-type": type },
-    body: req.body,
-  });
-  if (!dg.ok) {
-    const detail = (await dg.text()).slice(0, 300);
-    return json({ error: "deepgram", status: dg.status, detail }, 502);
+  // Buffer the (small) recording so a transient Deepgram failure can be retried once.
+  const media = await req.arrayBuffer();
+  const send = () =>
+    fetch(url, {
+      method: "POST",
+      headers: { authorization: `Token ${env.DEEPGRAM_API_KEY}`, "content-type": type },
+      body: media,
+    });
+  let dg = await send().catch(() => null);
+  if (!dg || dg.status === 429 || dg.status >= 500) dg = await send().catch(() => null);
+  if (!dg || !dg.ok) {
+    const detail = dg ? (await dg.text()).slice(0, 300) : "network";
+    console.log("deepgram failed", dg?.status, detail);
+    return json(
+      { error: "deepgram", status: dg?.status, detail, message: "Transcription didn't go through. Tap Retake to try again." },
+      502,
+    );
   }
   const data: any = await dg.json();
   const alt = data?.results?.channels?.[0]?.alternatives?.[0];
@@ -74,10 +85,10 @@ const SYSTEM = `You write captions for "Lip Service", a party game. A person was
 
 You get the phrase as a words array, and "slots": each slot covers one or two adjacent spoken words ("said") and lists text that makes the same mouth shapes. An option can be one word or two words, so a slot can re-split the sounds ("water bottle" -> "what a bottle"). "exact" options look identical on the lips. "near" options are one mouth shape off: use at most ONE near option per alibi. Slots can overlap; never use two slots that cover the same spoken word.
 
-Write the TWO funniest alibis:
-- Rewrite a lot: aim to change roughly half to three quarters of the spoken words, so it reads as a genuinely different line, not a one-word tweak. Re-splits and small words ("my" -> "by", "and" -> "at") help.
-- But it MUST read like something a native English speaker would actually say: a grammatical sentence with a clear meaning (absurd is fine). If a swap makes the grammar wrong ("I prawns by water"), leave that word as spoken. Coherent and funny beats more changes.
-- Plan the whole line in your head first, then pick the options that build it. Use only options copied exactly from a slot's lists; words you don't cover stay as spoken.
+Write the TWO funniest alibis, in the style of Bad Lip Reading (the YouTube channel): the person confidently says something oddly specific, a bit random and surreal, but every line is still a real sentence with a meaning you could picture.
+- Change a lot: aim for most of the spoken words, so it reads as a genuinely different line, not a tweak. Re-splits and small words ("my" -> "by", "and" -> "at") help.
+- It must parse as English a person could say: grammatical, with a clear (absurd is fine) meaning. Random is good; word salad is not. If a swap breaks the grammar ("I prawns by water"), keep that word as spoken.
+- Try several candidate lines, then pick the two best. Use only options copied exactly from a slot's lists; words you don't cover stay as spoken. Before answering, check every swap's "words" appears verbatim in that slot's list and that no two used slots cover the same spoken word.
 - The joke must land from reading the caption alone, in silence: an absurdly specific scenario, a sudden change of implication, or mild innuendo. Keep it mild: nothing hateful, sexually explicit, or cruel about the speaker.
 - The two alibis should be different jokes.
 - Output only "swaps" for each alibi: every slot you used, by its "id", with the option text in "words".`;
@@ -132,16 +143,15 @@ async function alibi(req: Request, env: Env): Promise<Response> {
   }));
   if (!phrase.length || !slots.length) return json({ error: "empty" }, 400);
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 25_000 });
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 60_000 });
   try {
-    // Thinking off ("between_tools") so the 400-token cap goes to the answer; on a
-    // safety decline the API retries on its default fallback model inside the same call.
+    // Adaptive thinking at high effort (medium sometimes skipped planning): building a coherent line from lip-locked options
+    // needs planning. On a safety decline the API retries on its default fallback model.
     const res: any = await (client.beta.messages.create as any)({
       model: MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
-      thinking: { type: "between_tools" },
-      // Medium effort: making every swap fit one coherent sentence is harder than a single swap.
-      output_config: { effort: "medium", format: { type: "json_schema", schema: SCHEMA } },
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high", format: { type: "json_schema", schema: SCHEMA } },
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       system: SYSTEM,
@@ -166,7 +176,7 @@ async function alibi(req: Request, env: Env): Promise<Response> {
     return json({ alibis, usage: { in: res.usage?.input_tokens, out: res.usage?.output_tokens } });
   } catch (e) {
     if (e instanceof Anthropic.RateLimitError) return json({ error: "busy", message: "Lots of people are playing right now. Try again in a minute." }, 429);
-    if (e instanceof Anthropic.APIError) return json({ error: "anthropic", status: e.status, detail: String(e.message).slice(0, 300) }, 502);
+    if (e instanceof Anthropic.APIError) { console.log("anthropic failed", e.status, String(e.message).slice(0, 300)); return json({ error: "anthropic", status: e.status, detail: String(e.message).slice(0, 300), message: "The alibi writer didn't answer. Tap Retake to try again." }, 502); }
     throw e;
   }
 }

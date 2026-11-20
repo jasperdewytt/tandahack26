@@ -157,7 +157,7 @@ async function process(take: Take) {
     const ranked = rankPhrases(words, lex, block, tr.duration ?? Infinity);
     if (!ranked.length) throw new Retake("No alibi this time", "Your lips were too honest. Try a longer answer that names a few things.");
 
-    status("Writing your alibi…");
+    status("Writing your alibi… this takes about 20 seconds.");
     let alibis: Alibi[] = [];
     let chosen = ranked[0];
     // One Sonnet call normally; a second only if the first phrase yields nothing valid.
