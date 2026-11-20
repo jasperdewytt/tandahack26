@@ -35,12 +35,12 @@ for (const [name, url] of Object.entries(SOURCES)) {
 }
 
 // ---------- coarse visemes ----------
-// Azure's 22 visemes collapsed to 12 mouth shapes a viewer can tell apart in silence.
+// Azure's 22 visemes collapsed to 14 mouth shapes a viewer can tell apart in silence.
 //   P closed lips (p b m)      F lip on teeth (f v)      D tongue between teeth (th dh)
 //   T alveolar (t d n s z)     L tongue tip up (l)       K back/hidden (k g ng h y)
 //   J lips pushed out (sh zh ch jh)                      R r-colour (r er)
-//   W rounded tight (w uw)     O rounded open (ao ow oy aw)
-//   A open (aa ae ah ay)       E spread (eh ey ih iy uh)
+//   W rounded tight (w uw)     O rounded open (ao ow oy)    U open-to-rounded (aw)
+//   A open (aa ae ah)          I open-to-spread (ay)        E spread (eh ey ih iy uh)
 const VISEME = {
   P: "P", B: "P", M: "P",
   F: "F", V: "F",
@@ -51,8 +51,8 @@ const VISEME = {
   SH: "J", ZH: "J", CH: "J", JH: "J",
   R: "R", ER: "R",
   W: "W", UW: "W",
-  AO: "O", OW: "O", OY: "O", AW: "O",
-  AA: "A", AE: "A", AH: "A", AY: "A",
+  AO: "O", OW: "O", OY: "O", AW: "U",
+  AA: "A", AE: "A", AH: "A", AY: "I",
   EH: "E", EY: "E", IH: "E", IY: "E", UH: "E",
 };
 const VOWELS = new Set(["AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW"]);

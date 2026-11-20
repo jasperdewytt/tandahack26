@@ -171,7 +171,7 @@ async function process(take: Take) {
     result = {
       clip: take.video,
       phrase: chosen.phrase,
-      original: caption(chosen.phrase.words),
+      original: caption(chosen.phrase.words.map((w) => w.p)),
       alibis,
     };
     await reveal();
@@ -197,37 +197,50 @@ async function api(url: string, body: BodyInit, type: string): Promise<any> {
   return data;
 }
 
+/** A span of 1-2 spoken words and the lip-compatible text that could replace it. */
+interface Slot { id: string; s: number; n: number; said: string; exact: string[]; near: string[] }
+
 interface Ranked {
   phrase: Phrase;
-  slots: { i: number; word: string; exact: string[]; near: string[] }[];
+  slots: Slot[];
   score: number;
+}
+
+function slotsFor(span: Word[], lex: Lexicon, block: Blocklist): Slot[] {
+  const clean2 = (list: string[]) => list.filter((o) => !block.blocks(o));
+  const slots: Slot[] = [];
+  span.forEach((w, s) => {
+    if (!lex.swappable(w.w)) return;
+    const one = lex.options([w.w]);
+    const exact = clean2(one.exact);
+    // Near misses only where exact options are scarce.
+    const near = exact.length < 3 ? clean2(one.near) : [];
+    if (exact.length || near.length) slots.push({ id: "", s, n: 1, said: w.w, exact, near });
+    // Re-split two adjacent words, unless punctuation sits between them.
+    const next = span[s + 1];
+    if (next && lex.swappable(next.w) && !/[.,!?;:]$/.test(w.p)) {
+      const two = clean2(lex.options([w.w, next.w], 12).exact);
+      if (two.length) slots.push({ id: "", s, n: 2, said: `${w.w} ${next.w}`, exact: two, near: [] });
+    }
+  });
+  return slots.slice(0, 22).map((sl, k) => ({ ...sl, id: `s${k}` }));
 }
 
 function rankPhrases(words: Word[], lex: Lexicon, block: Blocklist, duration: number): Ranked[] {
   const seen = new Set<string>();
   const out: Ranked[] = [];
   for (const span of spans(words)) {
-    const id = `${span[0].s}-${span.length}`;
-    if (seen.has(id)) continue;
-    seen.add(id);
+    const key = `${span[0].s}-${span.length}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     if (block.blocks(span.map((w) => w.p).join(" "))) continue;
-    // Smaller lists per slot now that every content word gets swapped (keeps the prompt bounded).
-    const slots = span
-      .map((w, i) => ({ i, word: w.w, ...lex.candidates(w.w, 20, 8) }))
-      .filter((s) => lex.isContent(s.word) && (s.exact.length || s.near.length))
-      .map((s) => {
-        const exact = s.exact.filter((c) => !block.blocks(c));
-        // Offer near misses only where exact options are scarce.
-        const near = exact.length < 3 ? s.near.filter((c) => !block.blocks(c)) : [];
-        return { ...s, exact, near };
-      })
-      .filter((s) => s.exact.length || s.near.length)
-      .slice(0, 12);
+    const slots = slotsFor(span, lex, block);
     if (!slots.length) continue;
-    // Favour phrases with many swappable words (exact ones most), near the 5 s target length.
-    const withExact = slots.filter((s) => s.exact.length).length;
-    const richness = slots.reduce((n, s) => n + Math.min(s.exact.length, 10) * 0.3 + Math.min(s.near.length, 5) * 0.1, 0);
-    const score = withExact * 10 + slots.length * 4 + richness + lengthFit(span) * 25;
+    // Favour phrases where most words can change, near the 5 s target length.
+    const covered = new Set<number>();
+    slots.forEach((sl) => sl.exact.length && [...Array(sl.n).keys()].forEach((d) => covered.add(sl.s + d)));
+    const coverage = covered.size / span.length;
+    const score = coverage * 40 + covered.size * 3 + lengthFit(span) * 25;
     out.push({ phrase: toPhrase(span, duration), slots, score });
   }
   return out.sort((a, b) => b.score - a.score);
@@ -235,34 +248,59 @@ function rankPhrases(words: Word[], lex: Lexicon, block: Blocklist, duration: nu
 
 async function askSonnet(r: Ranked, block: Blocklist): Promise<Alibi[]> {
   const words = r.phrase.words;
-  const payload = { phrase: words.map((w) => w.p), slots: r.slots };
+  const payload = {
+    phrase: words.map((w) => w.p),
+    slots: r.slots.map(({ id, said, exact, near }) => ({ id, said, exact, near })),
+  };
   const data = await api("/api/alibi", JSON.stringify(payload), "application/json");
   const out: Alibi[] = [];
-  const minSwaps = 1;
   for (const a of data.alibis ?? []) {
-    // Every swap must come from that slot's lip-checked list, one per slot, with at most
-    // one near miss in the whole alibi. A swap that breaks a rule reverts to the original
-    // word (still lip-true) instead of sinking the whole alibi.
-    const swaps: { i: number; word: string }[] = [];
+    // Every swap must be an option from its span's lip-checked list; spans may not overlap;
+    // at most one near miss per alibi. A swap that breaks a rule is dropped, so those words
+    // stay as spoken (still lip-true) instead of sinking the whole alibi.
+    const chosen: { slot: Slot; text: string }[] = [];
+    const used = new Set<number>();
     let nearUsed = false;
     for (const sw of a.swaps ?? []) {
-      const slot = r.slots.find((s) => s.i === sw.slot);
-      const word = clean(String(sw.word));
-      if (!slot || !word || word === clean(slot.word) || swaps.some((x) => x.i === slot.i) || block.blocks(word)) continue;
-      if (slot.exact.includes(word)) swaps.push({ i: slot.i, word });
-      else if (slot.near.includes(word) && !nearUsed) {
+      const slot = r.slots.find((s) => s.id === sw.id);
+      const text = String(sw.words ?? "").toLowerCase().replace(/[^a-z' ]/g, "").replace(/\s+/g, " ").trim();
+      if (!slot || !text || text === slot.said || block.blocks(text)) continue;
+      const span = [...Array(slot.n).keys()].map((d) => slot.s + d);
+      if (span.some((i) => used.has(i))) continue;
+      if (slot.exact.includes(text)) chosen.push({ slot, text });
+      else if (slot.near.includes(text) && !nearUsed) {
         nearUsed = true;
-        swaps.push({ i: slot.i, word });
-      }
+        chosen.push({ slot, text });
+      } else continue;
+      span.forEach((i) => used.add(i));
     }
-    if (swaps.length < minSwaps) continue;
-    const swapped = words.map((w, i) => {
-      const sw = swaps.find((x) => x.i === i);
-      return sw ? { ...w, p: swapCase(w.p, sw.word) } : w;
-    });
-    const text = caption(swapped);
+    if (!chosen.length) continue;
+
+    // Rebuild the caption, keeping capitalisation and punctuation around each replaced span.
+    const tokens: string[] = [];
+    const marks: number[] = [];
+    for (let i = 0; i < words.length; ) {
+      const c = chosen.find((x) => x.slot.s === i);
+      if (!c) {
+        tokens.push(words[i].p);
+        i++;
+        continue;
+      }
+      const repl = c.text.split(" ");
+      const first = words[i].p;
+      const last = words[i + c.slot.n - 1].p;
+      repl.forEach((w, k) => {
+        let t = w;
+        if (k === 0) t = swapCase(first, w).replace(/[^A-Za-z']+$/, "");
+        if (k === repl.length - 1) t += last.match(/[^A-Za-z']*$/)?.[0] ?? "";
+        marks.push(tokens.length);
+        tokens.push(t);
+      });
+      i += c.slot.n;
+    }
+    const text = caption(tokens);
     if (block.blocks(text) || out.some((o) => o.text === text)) continue;
-    out.push({ swaps, marks: swaps.map((s) => s.i), text });
+    out.push({ swaps: chosen.map((c) => ({ i: c.slot.s, word: c.text })), marks, text });
     if (out.length === 2) break;
   }
   return out;
@@ -277,8 +315,8 @@ function swapCase(orig: string, repl: string): string {
   return pre + r + post;
 }
 
-const caption = (ws: Word[]) => {
-  const s = ws.map((w) => w.p).join(" ").replace(/[,;:–—-]+$/, "");
+const caption = (tokens: string[]) => {
+  const s = tokens.join(" ").replace(/[,;:–—-]+$/, "");
   return s[0].toUpperCase() + s.slice(1);
 };
 

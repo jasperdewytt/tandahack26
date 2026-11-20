@@ -67,20 +67,20 @@ async function transcribe(req: Request, env: Env): Promise<Response> {
 
 interface AlibiReq {
   phrase: string[];
-  slots: { i: number; word: string; exact: string[]; near: string[] }[];
+  slots: { id: string; said: string; exact: string[]; near: string[] }[];
 }
 
-const SYSTEM = `You write captions for "Lip Service", a party game. A person was filmed saying a phrase. The clip loops on screen MUTED. We rewrite the caption using only words the speaker's mouth visibly also fits, so viewers believe the person silently said a completely different line.
+const SYSTEM = `You write captions for "Lip Service", a party game. A person was filmed saying a phrase. The clip loops on screen MUTED. We rewrite the caption using only words the speaker's mouth visibly also fits, so viewers believe the person silently said a completely different line, like Bad Lip Reading.
 
-You get the phrase as a words array and, for each content word ("slots", where "i" indexes into the words array), lists of lip-compatible replacements. "exact" words look identical on the lips. "near" words are one mouth shape off: use at most ONE near word per alibi. Words that are not slots (the, my, and, I...) stay exactly as they are.
+You get the phrase as a words array, and "slots": each slot covers one or two adjacent spoken words ("said") and lists text that makes the same mouth shapes. An option can be one word or two words, so a slot can re-split the sounds ("water bottle" -> "what a bottle"). "exact" options look identical on the lips. "near" options are one mouth shape off: use at most ONE near option per alibi. Slots can overlap; never use two slots that cover the same spoken word.
 
 Write the TWO funniest alibis:
-- Replace as many slots as you can, each with a word copied exactly from that slot's lists. Keep an original word (leave it out of "swaps") when no option makes sense.
-- Most important: the result must be ONE coherent, grammatical sentence that a real person might plausibly say out loud, with a clear meaning. A sensible line with fewer swaps beats a nonsense line with more. Never output word salad like "a pick punk of tongues".
-- Each "slot" in swaps is the slot's "i" value (its position in the words array), not its order in the slots list.
+- Rewrite a lot: aim to change roughly half to three quarters of the spoken words, so it reads as a genuinely different line, not a one-word tweak. Re-splits and small words ("my" -> "by", "and" -> "at") help.
+- But it MUST read like something a native English speaker would actually say: a grammatical sentence with a clear meaning (absurd is fine). If a swap makes the grammar wrong ("I prawns by water"), leave that word as spoken. Coherent and funny beats more changes.
+- Plan the whole line in your head first, then pick the options that build it. Use only options copied exactly from a slot's lists; words you don't cover stay as spoken.
 - The joke must land from reading the caption alone, in silence: an absurdly specific scenario, a sudden change of implication, or mild innuendo. Keep it mild: nothing hateful, sexually explicit, or cruel about the speaker.
 - The two alibis should be different jokes.
-- "line" is the full new caption; "swaps" lists every replaced slot.`;
+- Output only "swaps" for each alibi: every slot you used, by its "id", with the option text in "words".`;
 
 const SCHEMA = {
   type: "object",
@@ -90,18 +90,17 @@ const SCHEMA = {
       items: {
         type: "object",
         properties: {
-          line: { type: "string" },
           swaps: {
             type: "array",
             items: {
               type: "object",
-              properties: { slot: { type: "integer" }, word: { type: "string" } },
-              required: ["slot", "word"],
+              properties: { id: { type: "string" }, words: { type: "string" } },
+              required: ["id", "words"],
               additionalProperties: false,
             },
           },
         },
-        required: ["line", "swaps"],
+        required: ["swaps"],
         additionalProperties: false,
       },
     },
@@ -113,7 +112,7 @@ const SCHEMA = {
 async function alibi(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const len = Number(req.headers.get("content-length") ?? "0");
-  if (len > 24_000) return json({ error: "too_big" }, 413);
+  if (len > 40_000) return json({ error: "too_big" }, 413);
   const rl = await limited(req, env.RL_AI_IP, env.RL_AI_ALL);
   if (rl) return rl;
 
@@ -125,11 +124,11 @@ async function alibi(req: Request, env: Env): Promise<Response> {
   }
   // Bound the prompt regardless of what the client sends.
   const phrase = (body.phrase ?? []).slice(0, 16).map((w) => String(w).slice(0, 30));
-  const slots = (body.slots ?? []).slice(0, 12).map((s) => ({
-    i: Number(s.i),
-    word: String(s.word).slice(0, 30),
-    exact: (s.exact ?? []).slice(0, 20).map((w) => String(w).slice(0, 30)),
-    near: (s.near ?? []).slice(0, 8).map((w) => String(w).slice(0, 30)),
+  const slots = (body.slots ?? []).slice(0, 22).map((s) => ({
+    id: String(s.id).slice(0, 6),
+    said: String(s.said).slice(0, 40),
+    exact: (s.exact ?? []).slice(0, 15).map((w) => String(w).slice(0, 40)),
+    near: (s.near ?? []).slice(0, 6).map((w) => String(w).slice(0, 40)),
   }));
   if (!phrase.length || !slots.length) return json({ error: "empty" }, 400);
 
@@ -158,10 +157,9 @@ async function alibi(req: Request, env: Env): Promise<Response> {
     }
     const alibis = Array.isArray(parsed?.alibis)
       ? parsed.alibis.slice(0, 4).map((a: any) => ({
-          line: String(a.line ?? "").slice(0, 200),
           swaps: (Array.isArray(a.swaps) ? a.swaps : [])
             .slice(0, 12)
-            .map((s: any) => ({ slot: Number(s.slot), word: String(s.word ?? "").slice(0, 30) })),
+            .map((s: any) => ({ id: String(s.id ?? ""), words: String(s.words ?? "").slice(0, 40) })),
         }))
       : [];
     // max_tokens cut-offs return invalid JSON above, so they surface as "no alibi" rather than half a caption.

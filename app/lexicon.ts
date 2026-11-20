@@ -1,22 +1,20 @@
 // Browser-side homophene lookup over the build-time index (public/lex.txt).
 // Hard constraints: same syllable count, and the positions of closed lips (P),
 // lip-on-teeth (F) and rounded lips (W) never change. Exact first, then one near miss.
+//
+// Options are found for spans of one or two spoken words, and an option can itself be one
+// or two words, so the same run of mouth shapes can be re-split ("water bottle" -> "what a bottle").
 
 export interface Entry { key: string; syl: number; cand: boolean }
+export interface SpanOptions { exact: string[]; near: string[] }
 
 const PROTECTED = new Set(["P", "F", "W"]);
-const VOWELISH = ["A", "E", "O"];
+const VOWELISH = ["A", "E", "O", "I", "U"];
 const CONSONANTISH = ["D", "T", "L", "K", "J", "R"];
 
-const STOP = new Set(
-  ("a an the and or but if so of to in on at by for from with as is am are was were be been being it its it's " +
-    "i i'm i've i'd i'll me my mine we us our you your he him his she her they them their this that these those " +
-    "there here what which who whom whose when where why how do does did done have has had not no yes just " +
-    "very really also too then than um uh like oh okay yeah well can could would should will shall may might must " +
-    "some any all both each few more most other such only own same into about over under again out up down off " +
-    "get got go going gonna wanna today brought bring bringing")
-    .split(" "),
-);
+// Fillers and one-letter words are never swapped.
+const PAIR_RANK = 6000;
+const SKIP = new Set(["um", "uh", "erm", "hmm", "mm", "a", "i"]);
 
 export class Lexicon {
   forward = new Map<string, Entry>();
@@ -27,7 +25,7 @@ export class Lexicon {
     const text = await (await fetch(url)).text();
     const lex = new Lexicon();
     let i = 0;
-    for (const line of text.split("\n")) {
+    for (const line of text.split(/\r?\n/)) {
       if (!line) continue;
       const [word, key, syl, star] = line.split(" ");
       const e = { key, syl: Number(syl), cand: star !== "*" };
@@ -43,37 +41,85 @@ export class Lexicon {
     return lex;
   }
 
-  isContent(word: string): boolean {
+  /** Can this spoken word take part in a swap? */
+  swappable(word: string): boolean {
     const w = clean(word);
-    return w.length >= 3 && !STOP.has(w) && this.forward.has(w);
+    return w.length > 0 && !SKIP.has(w) && this.forward.has(w);
   }
 
-  /** Lip-compatible replacements for one word, most common first. */
-  candidates(word: string, maxExact = 30, maxNear = 15): { exact: string[]; near: string[] } {
-    const w = clean(word);
-    const e = this.forward.get(w);
-    if (!e) return { exact: [], near: [] };
-    const notSelf = (c: string) => c !== w && !sameStem(c, w);
-    const exact = (this.reverse.get(`${e.key}|${e.syl}`) ?? []).filter(notSelf).slice(0, maxExact);
+  private words(key: string, syl: number): string[] {
+    return this.reverse.get(`${key}|${syl}`) ?? [];
+  }
 
-    const near: string[] = [];
-    const seen = new Set(exact);
-    for (let i = 0; i < e.key.length; i++) {
-      const c = e.key[i];
-      if (PROTECTED.has(c)) continue;
-      const pool = VOWELISH.includes(c) ? VOWELISH : CONSONANTISH;
-      for (const r of pool) {
-        if (r === c) continue;
-        const k = collapse(e.key.slice(0, i) + r + e.key.slice(i + 1));
-        for (const cand of this.reverse.get(`${k}|${e.syl}`) ?? []) {
-          if (!seen.has(cand) && notSelf(cand)) {
-            seen.add(cand);
-            near.push(cand);
+  /**
+   * Lip-compatible replacements for a span of 1-2 spoken words: single words and word pairs
+   * whose combined mouth-shape sequence and syllable count match exactly, plus (single words
+   * only) near misses one shape off. Most common words first.
+   */
+  options(span: string[], maxExact = 15, maxNear = 6): SpanOptions {
+    const ws = span.map(clean);
+    const entries = ws.map((w) => this.forward.get(w));
+    if (entries.some((e) => !e)) return { exact: [], near: [] };
+    const key = collapse(entries.map((e) => e!.key).join(""));
+    const syl = entries.reduce((n, e) => n + e!.syl, 0);
+    const original = ws.join(" ");
+    const sameAsSpoken = (o: string) => o === original || (ws.length === 1 && sameStem(o, ws[0]));
+    const r = (w: string) => this.rank.get(w) ?? 1e9;
+
+    // Single words with the same shapes.
+    const singles = this.words(key, syl).filter((w) => !sameAsSpoken(w));
+
+    // Two-word re-splits. The boundary shape may be shared ("bat" + "top" ~ "battop").
+    const pairs: { text: string; score: number }[] = [];
+    for (let k = 1; k < key.length; k++) {
+      for (const overlap of [0, 1]) {
+        const left = key.slice(0, k);
+        const right = key.slice(k - overlap);
+        if (!right) continue;
+        for (let s1 = 1; s1 < syl; s1++) {
+          // Re-splits only use common words, so they read as real phrases (no names or fragments).
+          const common = (x: string) => r(x) < PAIR_RANK;
+          const L = this.words(left, s1).filter(common).slice(0, 8);
+          const R = this.words(right, syl - s1).filter(common).slice(0, 8);
+          for (const a of L) for (const b of R) {
+            const text = `${a} ${b}`;
+            if (!sameAsSpoken(text)) pairs.push({ text, score: r(a) + r(b) });
           }
         }
       }
     }
-    near.sort((a, b) => (this.rank.get(a) ?? 1e9) - (this.rank.get(b) ?? 1e9));
+    pairs.sort((a, b) => a.score - b.score);
+
+    // Mix: most common singles first, then pairs; spans of two spoken words lean on pairs.
+    const exact: string[] = [];
+    const seen = new Set<string>();
+    const push = (t: string) => !seen.has(t) && (seen.add(t), exact.push(t));
+    const singleQuota = ws.length === 1 ? Math.ceil(maxExact * 0.6) : Math.ceil(maxExact * 0.4);
+    singles.slice(0, singleQuota).forEach(push);
+    pairs.slice(0, maxExact).forEach((p) => exact.length < maxExact && push(p.text));
+    singles.slice(singleQuota).forEach((s) => exact.length < maxExact && push(s));
+
+    // Near misses: single spoken word, one non-protected shape changed.
+    const near: string[] = [];
+    if (ws.length === 1) {
+      const e = entries[0]!;
+      for (let i = 0; i < e.key.length; i++) {
+        const c = e.key[i];
+        if (PROTECTED.has(c)) continue;
+        const pool = VOWELISH.includes(c) ? VOWELISH : CONSONANTISH;
+        for (const sub of pool) {
+          if (sub === c) continue;
+          const k = collapse(e.key.slice(0, i) + sub + e.key.slice(i + 1));
+          for (const cand of this.words(k, e.syl)) {
+            if (!seen.has(cand) && !sameAsSpoken(cand)) {
+              seen.add(cand);
+              near.push(cand);
+            }
+          }
+        }
+      }
+      near.sort((a, b) => r(a) - r(b));
+    }
     return { exact, near: near.slice(0, maxNear) };
   }
 }
