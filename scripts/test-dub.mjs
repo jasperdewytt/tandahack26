@@ -40,12 +40,19 @@ const W = (w, s, e) => ({ w, p: w, s, e });
   const chunks = [{ s0: 0, s1: 2, w0: 0, w1: 2 }, { s0: 2, s1: 3, w0: 2, w1: 3 }, { s0: 3, s1: 4, w0: 3, w1: 4 }, { s0: 4, s1: 5, w0: 4, w1: 6 }];
   const times = tokens.map((_, i) => ({ s: i * 0.3, e: i * 0.3 + 0.25 }));
   const segs = app.planSegments({ words, tokens, chunks, times, start: 0.85, playEnd: 3.2 });
-  // "i"→"a" is tiny (0.1 s) and merges with "brought"→"bright" (no pause between them).
-  near(segs[0].dst0, 1.0); near(segs[0].dst1, 1.5); near(segs[0].src0, 0);
-  near(segs[1].dst0, 1.5); near(segs[2].dst0, 1.7);
-  // The pause before "today" is preserved and the final word is clamped to the playable clip.
-  near(segs[3].dst0, 2.6); near(segs[3].dst1, 3.2);
-  assert(segs[3].src1 <= 1.5 + 0.25 + 0.03 + 1e-9);
+  // Words with no visible pause between them are stretched as one run (fewer cuts, less stutter).
+  assert.equal(segs.length, 2);
+  near(segs[0].dst0, 1.0); near(segs[0].dst1, 2.1); near(segs[0].src0, 0); near(segs[0].src1, 0.9 + 0.25 + 0.03);
+  // The pause before "today" is its own anchor, clamped to the playable clip.
+  near(segs[1].dst0, 2.6); near(segs[1].dst1, 3.2);
+  assert(segs[1].src1 <= 1.5 + 0.25 + 0.03 + 1e-9);
+  // A comma in the line and the final word each start a new segment, even with no gap in the lips.
+  const w3 = [W("one", 0, 0.3), W("two", 0.3, 0.6), W("three", 0.6, 0.9), W("four", 0.9, 1.3)];
+  const segs3 = app.planSegments({
+    words: w3, tokens: ["won,", "too", "tree", "for"], chunks: [0, 1, 2, 3].map((i) => ({ s0: i, s1: i + 1, w0: i, w1: i + 1 })),
+    times: [0, 0.4, 0.7, 1.0].map((s) => ({ s, e: s + 0.25 })), start: 0, playEnd: 2,
+  });
+  assert.deepEqual(segs3.map((x) => x.dst0), [0, 0.3, 0.9]);
   // Pieces never overlap and never start before their lip window.
   for (let i = 1; i < segs.length; i++) assert(segs[i].dst0 >= segs[i - 1].dst1 - 1e-9);
   // First visible lip closure: "today"(no) vs. a chunk where the 2nd spoken / 2nd written word close the lips.

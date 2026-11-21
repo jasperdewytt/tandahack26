@@ -53,6 +53,8 @@ const PAUSE = 0.25; // never merge across a visible pause
 const TINY_DST = 0.12;
 const TINY_SRC = 0.08;
 const SRC_PAD = 0.03; // let final consonants ring out, but never into the next word
+const ANCHOR_GAP = 0.15; // a gap in the lips this long gets its own anchor
+const MAX_SEGMENT = 1.6; // longest run stretched as one piece
 
 export interface PlanInput {
   words: Word[]; // spoken words (original timings)
@@ -92,15 +94,35 @@ export function planSegments(p: PlanInput): Segment[] {
   }
   if (!closureDone && p.closedSaid) closureDone = true;
 
-  let segs: Segment[] = [];
-  for (const [s0, s1, w0, w1] of pairs) {
+  // Word-level pieces, each marked if it must start a new segment.
+  const pieces: (Segment & { anchor: boolean })[] = [];
+  let firstClosure = true;
+  pairs.forEach(([s0, s1, w0, w1], k) => {
     const dst0 = Math.max(p.start, p.words[s0].s);
     const dst1 = Math.min(p.playEnd, p.words[s1 - 1].e);
-    if (dst1 - dst0 < 0.02) continue;
+    if (dst1 - dst0 < 0.02) return;
     const src0 = p.times[w0].s;
     const next = p.times[w1]?.s ?? Infinity;
     const src1 = Math.max(src0 + 0.01, Math.min(p.times[w1 - 1].e + SRC_PAD, next));
-    segs.push({ src0, src1, dst0, dst1 });
+    const prev = pieces[pieces.length - 1];
+    const closure = !!(p.closedSaid?.[s0] && p.closedWrote?.[w0]);
+    const anchor =
+      !prev ||
+      dst0 - prev.dst1 >= ANCHOR_GAP || // a visible pause in the lips
+      /[,.;:!?—–-]["”’']?$/.test(p.tokens[w0 - 1] ?? "") || // a pause in the line
+      (closure && firstClosure) || // the first visible lip closure
+      (k === pairs.length - 1 && dst1 - dst0 >= TINY_DST); // the final (stressed) word
+    if (closure) firstClosure = false;
+    pieces.push({ src0, src1, dst0, dst1, anchor });
+  });
+  // Join the pieces between anchors so each phrase is stretched as one smooth run.
+  let segs: Segment[] = [];
+  for (const q of pieces) {
+    const last = segs[segs.length - 1];
+    if (!q.anchor && last && q.dst1 - last.dst0 <= MAX_SEGMENT) {
+      last.src1 = q.src1;
+      last.dst1 = q.dst1;
+    } else segs.push({ src0: q.src0, src1: q.src1, dst0: q.dst0, dst1: q.dst1 });
   }
 
   // Merge tiny pieces into the neighbour they touch most closely (never across a pause).
@@ -154,9 +176,14 @@ export function stretch(x: Float32Array, outLen: number, sr: number): Float32Arr
       const nat = prev + H;
       let best = ideal, bestC = -Infinity;
       const lo = Math.max(0, ideal - tol), hi = Math.min(n - N, ideal + tol);
-      for (let c = lo; c <= hi; c += 2) {
-        let s = 0;
-        for (let i = 0; i < H && nat + i < n; i += 4) s += x[c + i] * x[nat + i];
+      // Normalised cross-correlation against the natural continuation of the previous frame.
+      for (let c = lo; c <= hi; c++) {
+        let s = 0, e = 1e-9;
+        for (let i = 0; i < H && nat + i < n; i += 2) {
+          s += x[c + i] * x[nat + i];
+          e += x[c + i] * x[c + i];
+        }
+        s /= Math.sqrt(e);
         if (s > bestC) { bestC = s; best = c; }
       }
       pos = best;
@@ -174,8 +201,8 @@ export function stretch(x: Float32Array, outLen: number, sr: number): Float32Arr
 // ---------- render ----------
 
 const MIN_RATE = 0.45; // dst/src: at most ~2.2x faster
-const MAX_RATE = 2.0; // at most 2x slower
-const FADE = 0.012;
+const MAX_RATE = 2.2; // at most 2.2x slower
+const FADE = 0.008;
 
 /**
  * Place every segment at its absolute offset from `start` (so errors never accumulate).
@@ -300,7 +327,7 @@ export class DubController {
 export class ScreenDub {
   private ctx: AudioContext | null = null;
   private pending: { key: string; reveal: number; buffer: AudioBuffer } | null = null;
-  private src: AudioBufferSourceNode | null = null;
+  private active: { key: string; buffer: AudioBuffer; start: number; node: AudioBufferSourceNode | null; t0: number; prev: number } | null = null;
   onState: (state: "queued" | "playing" | "done" | "stopped" | "no-audio", key?: string) => void = () => {};
   onCaptions: (show: boolean) => void = () => {};
   onAudio: () => void = () => {};
@@ -338,42 +365,82 @@ export class ScreenDub {
     this.onState("queued", m.key);
   }
 
-  /** The loop just wrapped to `start`; begin the queued dub once the seek lands. */
+  /**
+   * The loop just wrapped to `start`. The queued dub becomes active, but its audio only starts
+   * once the video is visibly moving again (seeks on recorded clips can freeze for a moment).
+   * If the loop wraps while a dub is active, that pass is over.
+   */
   boundary(video: HTMLVideoElement, start: number) {
+    if (this.active) this.finish("done");
     const p = this.pending;
     if (!p || !this.ctx) return;
     this.pending = null;
-    const go = () => {
-      if (!this.ctx) return;
-      const src = this.ctx.createBufferSource();
-      src.buffer = p.buffer;
-      src.connect(this.ctx.destination);
-      const latency = (this.ctx as any).outputLatency || this.ctx.baseLatency || 0;
-      const offset = Math.max(0, video.currentTime - start + latency);
-      src.onended = () => {
-        if (this.src !== src) return;
-        this.src = null;
-        this.onCaptions(true);
-        this.onState("done", p.key);
-      };
-      this.src = src;
-      this.onCaptions(false);
-      src.start(0, offset);
-      this.onState("playing", p.key);
+    this.active = { key: p.key, buffer: p.buffer, start, node: null, t0: 0, prev: -1 };
+    this.onCaptions(false);
+    this.onState("playing", p.key);
+    this.tick(video);
+  }
+
+  /**
+   * Called every frame. Audio follows the picture: nothing plays while the video is frozen
+   * (seeking, buffering, paused), and if they drift apart by more than 150 ms the audio is
+   * restarted at the picture's position.
+   */
+  tick(video: HTMLVideoElement) {
+    const a = this.active;
+    if (!a || !this.ctx) return;
+    const t = video.currentTime;
+    const moving = !video.paused && !video.seeking && t > a.prev && a.prev >= 0;
+    a.prev = t;
+    if (!moving) {
+      if (a.node) this.silence(a);
+      return;
+    }
+    const v = t - a.start;
+    if (v >= a.buffer.duration - 0.03) return this.finish("done");
+    const latency = (this.ctx as any).outputLatency || this.ctx.baseLatency || 0;
+    const drift = a.node ? this.ctx.currentTime - a.t0 - (v + latency) : Infinity;
+    if (Math.abs(drift) > 0.15) this.playFrom(a, v + latency);
+  }
+
+  private playFrom(a: NonNullable<ScreenDub["active"]>, pos: number) {
+    if (!this.ctx) return;
+    if (a.node) this.silence(a);
+    const node = this.ctx.createBufferSource();
+    node.buffer = a.buffer;
+    node.connect(this.ctx.destination);
+    node.onended = () => {
+      if (this.active === a && a.node === node) this.finish("done");
     };
-    if (video.seeking) video.addEventListener("seeked", go, { once: true });
-    else go();
+    a.node = node;
+    a.t0 = this.ctx.currentTime - pos;
+    node.start(0, Math.max(0, pos));
+  }
+
+  private silence(a: NonNullable<ScreenDub["active"]>) {
+    const n = a.node;
+    a.node = null;
+    if (n) {
+      n.onended = null;
+      try { n.stop(); } catch { /* already stopped */ }
+    }
+  }
+
+  private finish(state: "done" | "stopped") {
+    const a = this.active;
+    this.active = null;
+    if (a) this.silence(a);
+    this.onCaptions(true);
+    if (a) this.onState(state, a.key);
   }
 
   /** Cancel anything pending or playing and bring the captions straight back. */
   stop(report = true) {
-    const had = !!(this.pending || this.src);
+    const had = !!(this.pending || this.active);
     this.pending = null;
-    if (this.src) {
-      const s = this.src;
-      this.src = null;
-      try { s.stop(); } catch { /* already stopped */ }
-    }
+    const a = this.active;
+    this.active = null;
+    if (a) this.silence(a);
     this.onCaptions(true);
     if (report && had) this.onState("stopped");
   }

@@ -492,6 +492,7 @@ function initScreen() {
   let cues: Cue[] = [];
   let showCaptions = true;
   screenPlayer.onTime = (t) => {
+    sdub.tick(screenPlayer.el);
     if (!showCaptions) return;
     const text = cueAt(cues, t);
     if (cap.textContent !== text) cap.textContent = text;
