@@ -192,7 +192,9 @@ const newTakeId = () => (crypto.randomUUID?.() ?? String(Math.random()).slice(2)
 async function api(url: string, body: BodyInit, type: string): Promise<any> {
   let r: Response;
   try {
-    r = await fetch(url, { method: "POST", headers: { "content-type": type }, body });
+    const headers: Record<string, string> = { "content-type": type };
+    if (presenterKey) headers["x-presenter-key"] = presenterKey; // skips the crowd rate limits
+    r = await fetch(url, { method: "POST", headers, body });
   } catch {
     throw new ApiError("No connection. Check your signal and try again.");
   }

@@ -27,7 +27,8 @@ const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =
     headers: { "content-type": "application/json", "cache-control": "no-store", ...extra },
   });
 
-async function limited(req: Request, perIp: RateLimit, global: RateLimit): Promise<Response | null> {
+async function limited(req: Request, env: Env, perIp: RateLimit, global: RateLimit): Promise<Response | null> {
+  if (isPresenter(req.headers.get("x-presenter-key") ?? "", env)) return null; // the stage demo never queues
   const ip = req.headers.get("cf-connecting-ip") ?? "unknown";
   const [a, b] = await Promise.all([perIp.limit({ key: ip }), global.limit({ key: "all" })]);
   if (!a.success) return json({ error: "slow_down", message: "Too many tries from this device. Wait a minute, then try again." }, 429, { "retry-after": "60" });
@@ -41,7 +42,7 @@ async function transcribe(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const len = Number(req.headers.get("content-length") ?? "0");
   if (len > MAX_MEDIA_BYTES) return json({ error: "too_big", message: "That recording is too large. Keep it to about 10 seconds." }, 413);
-  const rl = await limited(req, env.RL_DG_IP, env.RL_DG_ALL);
+  const rl = await limited(req, env, env.RL_DG_IP, env.RL_DG_ALL);
   if (rl) return rl;
 
   const type = (req.headers.get("content-type") ?? "application/octet-stream").split(";")[0];
@@ -96,7 +97,7 @@ async function alibi(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method" }, 405);
   const len = Number(req.headers.get("content-length") ?? "0");
   if (len > 40_000) return json({ error: "too_big" }, 413);
-  const rl = await limited(req, env.RL_AI_IP, env.RL_AI_ALL);
+  const rl = await limited(req, env, env.RL_AI_IP, env.RL_AI_ALL);
   if (rl) return rl;
 
   let body: AlibiReq;

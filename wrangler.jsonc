@@ -15,12 +15,14 @@
   "durable_objects": { "bindings": [{ "name": "DUB", "class_name": "DubGateDO" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DubGateDO"] }],
   // Cloudflare Rate Limiting bindings (period must be 10 or 60 seconds).
-  // *_IP limits each client (venue Wi-Fi shares one IP, so keep it generous);
-  // *_ALL is a global ceiling keyed on a constant: 30 Sonnet calls/min is ~US$0.12/min max.
+  // *_IP limits each client. Venue Wi-Fi puts the whole room behind one IP, so it's set very high.
+  // *_ALL is a global ceiling keyed on a constant. A recording makes 2 to 4 Opus calls at about
+  // US$0.10 in total, so 300 calls/min is roughly 100 recordings and US$10 a minute at full load.
+  // Presenter requests (valid x-presenter-key) skip both limits so the stage demo always gets through.
   "ratelimits": [
-    { "name": "RL_DG_IP", "namespace_id": "2601", "simple": { "limit": 20, "period": 60 } },
-    { "name": "RL_DG_ALL", "namespace_id": "2602", "simple": { "limit": 60, "period": 60 } },
-    { "name": "RL_AI_IP", "namespace_id": "2603", "simple": { "limit": 20, "period": 60 } },
-    { "name": "RL_AI_ALL", "namespace_id": "2604", "simple": { "limit": 30, "period": 60 } }
+    { "name": "RL_DG_IP", "namespace_id": "2601", "simple": { "limit": 1000, "period": 60 } },
+    { "name": "RL_DG_ALL", "namespace_id": "2602", "simple": { "limit": 500, "period": 60 } },
+    { "name": "RL_AI_IP", "namespace_id": "2603", "simple": { "limit": 1000, "period": 60 } },
+    { "name": "RL_AI_ALL", "namespace_id": "2604", "simple": { "limit": 300, "period": 60 } }
   ]
 }
