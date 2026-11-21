@@ -414,3 +414,103 @@ main:is([data-view="hold"], [data-view="project"], [data-view="title"], [data-vi
 .try .qr svg { width: min(25vw, 50vh); display: block; }
 .try-label { font: 700 calc(2.9 * var(--u))/1.2 var(--font); color: var(--subtitle); margin: calc(2.4 * var(--u)) 0 0; }
 .try .qr-url { white-space: nowrap; font-size: calc(2 * var(--u)); color: var(--powder); margin: calc(0.6 * var(--u)) 0 0; }
+
+/* ---------- motion (crowd flow on phones) ----------
+   One block on purpose: delete it to go back to the static version. */
+@media (prefers-reduced-motion: no-preference) {
+  :root { --ease-out: cubic-bezier(0.22, 1, 0.36, 1); --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+  /* Each phone screen rises in as it appears; the intro staggers its parts. */
+  main[data-view="intro"]  .view[data-for="intro"] > *,
+  main[data-view="record"] .view[data-for="record"] > *,
+  main[data-view="work"]   .view[data-for="work"] > *,
+  main[data-view="reveal"] .view[data-for="reveal"] > *,
+  main[data-view="fail"]   .view[data-for="fail"] > * {
+    animation: rise-in 560ms var(--ease-out) both;
+  }
+  .view[data-for="intro"] > :nth-child(2) { animation-delay: 70ms; }
+  .view[data-for="intro"] > :nth-child(3) { animation-delay: 140ms; }
+  .view[data-for="intro"] > :nth-child(4) { animation-delay: 210ms; }
+  .view[data-for="intro"] > :nth-child(5),
+  .view[data-for="intro"] > :nth-child(6) { animation-delay: 280ms; }
+  .view[data-for="intro"] > :nth-child(n+7) { animation-delay: 350ms; }
+  .view[data-for="record"] > :nth-child(n+2),
+  .view[data-for="work"] > :nth-child(n+2),
+  .view[data-for="reveal"] > :nth-child(n+2) { animation-delay: 120ms; }
+  @keyframes rise-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+  /* The wordmark talks: a short lip-sync wobble after it lands, then every few seconds. */
+  main[data-view="intro"] .view[data-for="intro"] > .mark {
+    display: inline-block;
+    transform-origin: 50% 60%;
+    animation: rise-in 560ms var(--ease-out) both, mouth 4.8s 900ms ease-in-out infinite;
+  }
+  @keyframes mouth {
+    0%, 82%, 100% { transform: none; }
+    85% { transform: scale(1.02, 0.9); }
+    88% { transform: scale(0.99, 1.06); }
+    91% { transform: scale(1.015, 0.94); }
+    94% { transform: none; }
+  }
+
+  /* Buttons feel physical. */
+  button { transition: transform 160ms var(--ease-out), background-color 200ms ease, box-shadow 200ms ease, opacity 200ms ease; }
+  button:not(:disabled):active { transform: scale(0.97); }
+  main[data-view="intro"] #start:not(:disabled) { animation: ready 520ms var(--ease-spring); }
+  @keyframes ready { 0% { transform: scale(0.96); } 60% { transform: scale(1.03); } 100% { transform: none; } }
+
+  /* Recording: a soft breathing ring and a ticking count. */
+  main[data-view="record"] .view[data-for="record"] > .frame { animation: rise-in 560ms var(--ease-out) both, rec-ring 1.6s ease-in-out 400ms infinite; }
+  @keyframes rec-ring {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(215,25,63,0.55); }
+    50% { box-shadow: 0 0 0 10px rgba(215,25,63,0); }
+  }
+  .rec-count::before {
+    content: ""; display: inline-block; width: 0.55em; height: 0.55em; margin-right: 0.4em;
+    border-radius: 50%; background: var(--lipstick); vertical-align: 0.12em;
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0.15; } }
+  .rec-meter span { transition: width 250ms linear; }
+
+  /* Working: a scan line reads the lips, and the status text breathes. */
+  .frame.dim::after {
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 28%;
+    background: linear-gradient(to bottom, rgba(255,225,77,0), rgba(255,225,77,0.22) 85%, rgba(255,225,77,0.7));
+    border-bottom: 2px solid var(--subtitle);
+    animation: scan 2.2s var(--ease-out) infinite;
+    pointer-events: none;
+  }
+  @keyframes scan { from { transform: translateY(-100%); } to { transform: translateY(360%); } }
+  main[data-view="work"] .view[data-for="work"] > .status { animation: rise-in 560ms var(--ease-out) both, breathe 2.2s ease-in-out 600ms infinite; }
+  @keyframes breathe { 50% { opacity: 0.55; } }
+
+  /* Reveal: the frame lands with a little bounce, options cascade in. */
+  main[data-view="reveal"] .view[data-for="reveal"] > .frame { animation: land 700ms var(--ease-spring) both; }
+  @keyframes land { from { opacity: 0; transform: scale(0.94) translateY(10px); } to { opacity: 1; transform: none; } }
+  .toggle button { animation: rise-in 500ms var(--ease-out) both; }
+  .toggle button:nth-child(1) { animation-delay: 250ms; }
+  .toggle button:nth-child(2) { animation-delay: 330ms; }
+  .toggle button:nth-child(3) { animation-delay: 410ms; }
+  .toggle button:nth-child(n+4) { animation-delay: 490ms; }
+
+  /* Swapped words get their underline drawn in when that caption is chosen. */
+  .toggle mark {
+    text-decoration: none;
+    background: linear-gradient(rgba(215,25,63,0.6), rgba(215,25,63,0.6)) 0 100% / 100% 2px no-repeat;
+    padding-bottom: 0.12em;
+  }
+  .toggle button[aria-checked="true"] mark {
+    background-image: linear-gradient(var(--lipstick), var(--lipstick));
+    background-size: 100% 3px;
+    animation: draw 460ms var(--ease-out) both;
+  }
+  .toggle button[aria-checked="true"] mark:nth-of-type(2) { animation-delay: 60ms; }
+  .toggle button[aria-checked="true"] mark:nth-of-type(3) { animation-delay: 120ms; }
+  .toggle button[aria-checked="true"] mark:nth-of-type(n+4) { animation-delay: 180ms; }
+  @keyframes draw { from { background-size: 0 3px; } }
+
+  /* Caption change: a quick drop-in instead of a plain fade. */
+  .caption.swap { animation: caption-pop 220ms var(--ease-out); }
+  @keyframes caption-pop { from { opacity: 0; transform: translateY(6px) scale(0.98); filter: blur(2px); } to { opacity: 1; transform: none; filter: none; } }
+}
