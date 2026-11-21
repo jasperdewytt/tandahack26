@@ -41,7 +41,7 @@ createServer(async (req, res) => {
     // Single-page app: unknown paths get the app shell.
     return send(res, 200, TYPES[".html"], await readFile(join(root, "index.html")));
   }
-}).listen(PORT, () => console.log(`Lip Service offline at http://localhost:${PORT}  (presenter: /stage?k=local&sample, projector: /screen)`));
+}).listen(PORT, () => console.log(`Mouth Alibi offline at http://localhost:${PORT}  (presenter: /stage?k=local&sample, projector: /screen)`));
 
 function send(res, status, type, body) {
   res.writeHead(status, { "content-type": type });

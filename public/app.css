@@ -44,7 +44,9 @@ main[data-view="work"]    .view[data-for="work"],
 main[data-view="reveal"]  .view[data-for="reveal"],
 main[data-view="fail"]    .view[data-for="fail"],
 main[data-view="hold"]    .view[data-for="hold"],
-main[data-view="project"] .view[data-for="project"] { display: block; }
+main[data-view="project"] .view[data-for="project"],
+main[data-view="title"]   .view[data-for="title"],
+main[data-view="final"]   .view[data-for="final"] { display: block; }
 
 /* ---------- type ---------- */
 
@@ -226,8 +228,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ---------- projector ---------- */
 
-body:has(main[data-view="hold"]), body:has(main[data-view="project"]) { background: var(--night); color: var(--white); }
-main:is([data-view="hold"], [data-view="project"]) { max-width: none; padding: 0; }
+body:has(main:is([data-view="hold"], [data-view="project"], [data-view="title"], [data-view="final"])) { background: var(--night); color: var(--white); }
+main:is([data-view="hold"], [data-view="project"], [data-view="title"], [data-view="final"]) { max-width: none; padding: 0; }
 
 .hold {
   min-height: 100dvh;
@@ -241,9 +243,9 @@ main:is([data-view="hold"], [data-view="project"]) { max-width: none; padding: 0
 .tagline.big { font-size: clamp(1.5rem, 3.2vw, 3.2rem); color: var(--powder); margin: 1rem 0 0; }
 .tagline.join { font-weight: 400; font-size: clamp(1.1rem, 2vw, 2rem); margin-top: 3vw; max-width: 22em; }
 .qr-wrap { text-align: center; }
-#qr { background: var(--white); padding: 1.2rem; border-radius: 1rem; line-height: 0; }
-#qr svg { width: min(28vw, 22rem); height: auto; }
-#qr-url { font-size: clamp(1rem, 1.6vw, 1.6rem); margin: 1rem 0 0; color: var(--powder); }
+.qr { background: var(--white); padding: 1.2rem; border-radius: 1rem; line-height: 0; }
+.qr svg { width: min(28vw, 22rem); height: auto; }
+.hold .qr-url { font-size: clamp(1rem, 1.6vw, 1.6rem); margin: 1rem 0 0; color: var(--powder); }
 
 .screen-frame {
   position: relative;
@@ -271,3 +273,89 @@ main:is([data-view="hold"], [data-view="project"]) { max-width: none; padding: 0
 .sound-hint { position: fixed; right: 16px; bottom: 12px; margin: 0; font-size: 14px; opacity: .45; }
 .sound-hint[hidden] { display: none; }
 .caption[hidden] { display: none; }
+
+/* ---------- slides (projector) ----------
+   Sized in min(vw, vh) so they hold at 16:9, 16:10 or 4:3 and read from the back row. */
+
+.slide { height: 100dvh; overflow: hidden; }
+
+/* Title: the wordmark alone, with the tagline set exactly where the show's subtitles appear. */
+.title-slide { position: relative; display: grid; place-items: center; }
+.title-mark { font-size: min(17vw, 30vh); margin: 0 0 8vh; line-height: 0.9; }
+.caption.title-caption { font-size: min(4.6vw, 8.2vh); bottom: 6vh; left: 5vw; right: 5vw; }
+
+/* Final: the question and its answer on the left, the way in on the right. */
+.final-slide {
+  --u: min(1vw, 1.78vh);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: calc(6 * var(--u));
+  padding: calc(6 * var(--u)) calc(7 * var(--u));
+}
+.ask {
+  font: 700 calc(4.1 * var(--u))/1.08 var(--font);
+  color: var(--white);
+  margin: 0 0 calc(5 * var(--u));
+  max-width: 17em;
+  text-wrap: balance;
+}
+.flow {
+  display: grid;
+  grid-template-columns: max-content auto;
+  font-size: calc(2.75 * var(--u));
+  line-height: 1.25;
+  color: var(--powder);
+}
+.step { grid-column: 1; margin: 0; font-weight: 700; }
+.down {
+  grid-column: 1;
+  display: block;
+  width: 0.7em;
+  height: 1.15em;
+  margin-left: 0.15em;
+  background: center / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 24'%3E%3Cpath d='M7 2v18M2 15l5 6 5-6' stroke='%23D7193F' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+/* The return arrow: a line out of "check the fit", round the bracket, back into the writer. */
+.step.joined { display: flex; align-items: center; }
+.step.joined::after {
+  content: "";
+  flex: 1;
+  min-width: 1em;
+  height: 0.15em;
+  margin-left: 0.4em;
+  background: var(--lipstick);
+}
+.step.into::after {
+  height: 0.7em;
+  background:
+    left center / auto 100% no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14'%3E%3Cpath d='M10 0L0 7l10 7z' fill='%23D7193F'/%3E%3C/svg%3E"),
+    center / 100% 0.15em no-repeat linear-gradient(var(--lipstick), var(--lipstick));
+}
+.bracket {
+  grid-column: 2;
+  grid-row: 5 / 8;
+  width: 1.1em;
+  margin: 0.55em 0;
+  border: 0.19em solid var(--lipstick);
+  border-left: 0;
+  border-radius: 0 0.7em 0.7em 0;
+}
+/* Sits inside the loop, between the two steps it joins. */
+.loop-label {
+  grid-column: 1;
+  grid-row: 6;
+  justify-self: end;
+  align-self: center;
+  margin: 0 0.6em 0 0;
+  font-size: 0.8em;
+  color: var(--white);
+}
+.flow .down:nth-of-type(3) { grid-row: 6; height: 1.7em; }
+
+.try { text-align: center; }
+.try .qr { padding: calc(1.6 * var(--u)); border-radius: calc(1.2 * var(--u)); }
+.try .qr svg { width: min(25vw, 50vh); display: block; }
+.try-label { font: 700 calc(2.9 * var(--u))/1.2 var(--font); color: var(--subtitle); margin: calc(2.4 * var(--u)) 0 0; }
+.try .qr-url { white-space: nowrap; font-size: calc(2 * var(--u)); color: var(--powder); margin: calc(0.6 * var(--u)) 0 0; }
+.presenter-row button[aria-pressed="true"] { background: var(--ink); color: var(--white); }

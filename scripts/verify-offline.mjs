@@ -10,6 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import assert from "node:assert/strict";
+import qrcode from "qrcode-generator";
 
 const sampleDir = resolve(process.argv[2] ?? "public/sample");
 assert(existsSync(join(sampleDir, "sample.json")), `no sample.json in ${sampleDir}`);
@@ -74,7 +75,8 @@ try {
     const click = async (x, y) => {
       for (const type of ["mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 }, sessionId);
     };
-    return { ev, click };
+    const reload = () => cdp("Page.reload", {}, sessionId);
+    return { ev, click, reload };
   }
   const waitFor = async (fn, what, ms = 15000, show) => {
     const t0 = Date.now();
@@ -148,6 +150,74 @@ try {
       ok(`alibi ${n + 1} has no saved dub: presenter told privately ("${note.slice(0, 60)}…"), projector stays silent`);
     }
   }
+
+  // The talk: title -> clip -> alibi -> dub -> final slide, then rehearsal back to the clip.
+  const view = () => screen.ev(`document.getElementById("app").dataset.view`);
+  const dubN = dubbed[0];
+  const audioPlays = async (what) => {
+    const before = await screen.ev(`window.__audio.length`);
+    await stage.ev(`document.getElementById("p-hear").click()`);
+    await waitFor(() => screen.ev(`window.__audio.length > ${before}`), what, 20000);
+  };
+  const revealAlibi = async (n) => {
+    const words = new Set(meta.alibis[n].text.toLowerCase().replace(/[^a-z' ]/g, "").split(" "));
+    await stage.ev(`document.querySelectorAll("#toggle button")[${n + 1}].click(); document.getElementById("p-reveal").click()`);
+    await waitFor(async () => {
+      const [v, cap] = (await screenText()).split("|");
+      return v === "project" && cap && cap.toLowerCase().replace(/[^a-z' ]/g, "").split(" ").every((w) => words.has(w));
+    }, `alibi ${n + 1} caption`, 15000, screenText);
+  };
+  await stage.ev(`document.getElementById("p-title").click()`);
+  await waitFor(async () => (await view()) === "title", "title slide", 5000, view);
+  assert.equal(await screen.ev(`document.querySelector(".title-slide").innerText.split(/[\\n ]+/).join(" ").trim()`), "Mouth Alibi your mouth has an alibi.");
+  ok("title slide on the projector");
+  await stage.ev(`document.getElementById("p-send").click()`);
+  await waitFor(async () => (await view()) === "project", "clip after the title", 15000, view);
+  ok("title -> prepared clip with the original caption");
+  if (dubbed.length) {
+    await revealAlibi(dubN);
+    await audioPlays("dub before the final slide");
+    ok(`alibi ${dubN + 1} revealed over the same footage; saved dub playing`);
+    await stage.ev(`document.getElementById("p-final").click()`);
+    await waitFor(async () => (await view()) === "final", "final slide", 5000, view);
+    await waitFor(() => stage.ev(`/stopped/i.test(document.getElementById("p-dub").textContent)`), "dub stopped by the slide", 5000,
+      () => stage.ev(`document.getElementById("p-dub").textContent`));
+    ok("final slide stops the playing dub");
+  } else {
+    await stage.ev(`document.getElementById("p-final").click()`);
+    await waitFor(async () => (await view()) === "final", "final slide", 5000, view);
+  }
+  const crowdHost = "mouth-alibi.lip-service.workers.dev"; // localhost rehearsal -> hosted crowd URL from <meta name="crowd-url">
+  assert.equal(await screen.ev(`document.querySelector(".final-slide .qr-url").textContent`), crowdHost);
+  const want = qrcode(0, "M");
+  want.addData(`https://${crowdHost}/`);
+  want.make();
+  const modules = want.createSvgTag({ cellSize: 8, margin: 0, scalable: true }).match(/ d="([^"]+)"/)[1];
+  assert.equal(await screen.ev(`document.querySelector(".final-slide .qr svg path").getAttribute("d")`), modules, "QR encodes the crowd URL");
+  assert(!(await screen.ev(`document.documentElement.outerHTML.includes("k=")`)), "no presenter key on the projector");
+  ok(`final slide: QR and URL point at ${crowdHost}, no presenter key on the projector`);
+  await sleep(1500);
+  assert.equal(await view(), "final", "final slide stays put");
+  await screen.reload();
+  await waitFor(async () => (await view()) === "final", "final slide after a projector refresh", 10000, view);
+  ok("projector refresh recovers the final slide");
+  await screen.click(200, 200); // sound again after the refresh
+  await waitFor(() => screen.ev(`document.getElementById("sound-hint").hidden`), "projector sound on after refresh");
+  await stage.ev(`document.getElementById("p-send").click()`);
+  await waitFor(async () => (await view()) === "project", "back to the clip", 15000, view);
+  ok("final slide -> back to the prepared clip without reloading the sample");
+  if (dubbed.length) {
+    await revealAlibi(dubN);
+    await audioPlays("saved dub after returning to the clip");
+    ok("saved dub still plays from cache after the slides");
+    await screen.reload();
+    await waitFor(async () => {
+      const cap = (await screenText()).split("|");
+      return cap[0] === "project" && cap[1] && meta.alibis[dubN].text.toLowerCase().includes(cap[1].toLowerCase().replace(/[^a-z' ]/g, "").split(" ")[0]);
+    }, "alibi clip after a projector refresh", 15000, screenText);
+    ok("projector refresh recovers the alibi clip");
+  }
+
   const external = requests.filter((u) => !u.startsWith(ORIGIN) && !u.startsWith("data:") && !u.startsWith("blob:") && u !== "about:blank");
   console.log(`  note  external requests attempted (all unresolvable): ${[...new Set(external.map((u) => new URL(u).host))].join(", ") || "none"}`);
   console.log(`Offline fallback verified (${results.length} checks) with ${sampleDir}${meta.synthetic ? " [SYNTHETIC FIXTURE]" : ""}.`);

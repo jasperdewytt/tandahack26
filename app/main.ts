@@ -5,7 +5,7 @@ import { Lexicon } from "./lexicon";
 import { Blocklist } from "./blocklist";
 import type { Word, Phrase } from "./phrase";
 import { rankPhrases, writeAlibis, caption, originalCues, expandSampleCues, cueAt, type Alibi, type Cue } from "./pipeline";
-import { channel, type StageMsg } from "./stage";
+import { channel, type StageMsg, type Slide } from "./stage";
 import { DubController, ScreenDub, fit, type Fitted, type DubTarget } from "./dub";
 import { sampleExport } from "./sample";
 
@@ -290,7 +290,7 @@ function fail(title: string, msg: string) {
 
 // ---------- presenter ----------
 
-type ScreenState = "hold" | "original" | "alibi";
+type ScreenState = "hold" | Slide | "original" | "alibi";
 let screenState: ScreenState = "hold";
 // What the projector shows, saved at the moment it was sent. Browsing other alibis (or a new
 // take) on the Surface never changes this; "Hear it" always dubs the alibi on screen.
@@ -308,7 +308,7 @@ async function initPresenter() {
   if (!ok) return; // plain crowd mode
   presenter = true;
   presenterKey = k;
-  document.title = "Lip Service · presenter";
+  document.title = "Mouth Alibi · presenter";
   send = channel((m) => {
     if (m.t === "hello") resendScreen();
     else if (m.t === "audio") {
@@ -358,14 +358,19 @@ async function initPresenter() {
     send?.({ t: "caption", cues: onScreen.res.originalCues, reveal: revealId });
     updatePresenter();
   });
-  $("p-hold").addEventListener("click", () => {
+  // Hold and the slides leave the take, its alibis and its cached dubs on the Surface:
+  // "Show original on screen" puts the same clip straight back.
+  const toScreen = (s: "hold" | Slide) => {
     dub!.cancel();
-    screenState = "hold";
+    screenState = s;
     onScreen = null;
     revealId++;
-    send?.({ t: "hold" });
+    resendScreen();
     updatePresenter();
-  });
+  };
+  $("p-hold").addEventListener("click", () => toScreen("hold"));
+  $("p-title").addEventListener("click", () => toScreen("title"));
+  $("p-final").addEventListener("click", () => toScreen("final"));
   $("p-hear").addEventListener("click", () => {
     if (screenState !== "alibi" || !onScreen?.alibi) return;
     const { res, alibi } = onScreen;
@@ -416,6 +421,7 @@ async function requestDub(target: DubTarget): Promise<Fitted> {
 
 function resendScreen() {
   if (!send) return;
+  if (screenState === "title" || screenState === "final") return send({ t: "slide", n: screenState });
   if (screenState === "hold" || !onScreen) return send({ t: "hold" });
   const { res, alibi } = onScreen;
   send({ t: "show", clip: res.clip, start: res.phrase.start, end: res.phrase.end, cues: alibi ? alibi.cues : res.originalCues, reveal: revealId });
@@ -423,13 +429,17 @@ function resendScreen() {
 
 function updatePresenter() {
   const st = $("p-state");
-  $<HTMLButtonElement>("p-reveal").disabled = screenState === "hold" || selected === 0;
+  $<HTMLButtonElement>("p-reveal").disabled = !onScreen || selected === 0;
   $<HTMLButtonElement>("p-back").disabled = screenState !== "alibi";
   $<HTMLButtonElement>("p-hear").disabled = screenState !== "alibi";
   $<HTMLButtonElement>("p-savedub").disabled = !result || !result.alibis.some((a) => dub?.cache.has(dubKey(result!, a)));
-  $("p-send").textContent = screenState === "hold" ? "Show original on screen" : "Resend original to screen";
+  $("p-send").textContent = onScreen ? "Resend original to screen" : "Show original on screen";
+  $("p-title").setAttribute("aria-pressed", String(screenState === "title"));
+  $("p-final").setAttribute("aria-pressed", String(screenState === "final"));
   const what =
     screenState === "hold" ? "Screen is holding." :
+    screenState === "title" ? "Screen shows the title slide." :
+    screenState === "final" ? "Screen shows the final slide with the QR." :
     screenState === "original" ? "Screen shows the original caption." :
     `Screen shows alibi ${onScreen?.n}.`;
   st.firstChild!.textContent = what + " ";
@@ -455,14 +465,19 @@ function download(blob: Blob, name: string) {
 // ---------- projector ----------
 
 function initScreen() {
-  document.title = "Lip Service · screen";
+  document.title = "Mouth Alibi · screen";
   setView("hold");
-  const url = location.origin.replace(/^https?:\/\//, "");
+  // The crowd flow at the site root, never a presenter link. On localhost (offline rehearsal)
+  // use the hosted crowd URL, since a phone scanning the projector can't reach this laptop.
+  const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  const configured = document.querySelector<HTMLMetaElement>('meta[name="crowd-url"]')?.content;
+  const crowd = new URL("/", local && configured ? configured : location.origin).href;
   const qr = qrcode(0, "M");
-  qr.addData(location.origin + "/");
+  qr.addData(crowd);
   qr.make();
-  $("qr").innerHTML = qr.createSvgTag({ cellSize: 8, margin: 0, scalable: true });
-  $("qr-url").textContent = url;
+  const svg = qr.createSvgTag({ cellSize: 8, margin: 0, scalable: true });
+  document.querySelectorAll(".qr").forEach((el) => (el.innerHTML = svg));
+  document.querySelectorAll(".qr-url").forEach((el) => (el.textContent = crowd.replace(/^https?:\/\//, "").replace(/\/$/, "")));
 
   const screenPlayer = new LoopPlayer($<HTMLVideoElement>("screen-player"));
   const cap = $("screen-caption");
@@ -487,12 +502,12 @@ function initScreen() {
   sdub.onState = (state, key) => post({ t: "dub-state", state, key });
   screenPlayer.onLoop = () => sdub.boundary(screenPlayer.el, start);
   const post = channel(async (m) => {
-    if (m.t === "hold") {
+    if (m.t === "hold" || m.t === "slide") {
       sdub.stop();
       reveal = -1;
       screenPlayer.stop();
       lastClip = null;
-      setView("hold");
+      setView(m.t === "slide" ? m.n : "hold");
     } else if (m.t === "dub") {
       sdub.queue(m, reveal);
     } else if (m.t === "dub-stop") {

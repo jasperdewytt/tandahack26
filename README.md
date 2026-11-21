@@ -1,8 +1,8 @@
-# Lip Service
+# Mouth Alibi
 
 *your mouth has an alibi*
 
-Live: https://lip-service.lip-service.workers.dev
+Live: https://mouth-alibi.lip-service.workers.dev (the old https://lip-service.lip-service.workers.dev deployment is left running for existing links)
 
 Record a ~10 second answer on your phone. We transcribe it, find words your lips could just as easily have said, and loop the clip on mute so you can flip between what you said and two alibis. Build spec: [SPEC.md](SPEC.md).
 
@@ -43,8 +43,9 @@ node scripts/make-offline-fixture.mjs; node scripts/verify-offline.mjs testdata/
 
 1. On the Surface, open the projector tab on the extended display: `/screen` (holding screen with the QR code). Click once for fullscreen.
 2. On the Surface's own display, open the presenter tab: `/stage?k=<PRESENTER_TOKEN>`. Never show this URL.
-3. Record the volunteer. Pick an alibi privately, press **Show original on screen**, then **Reveal selected alibi**. **Back to original** and **Hold screen** do what they say.
-4. Stage dub. During setup, click the projector tab once to unlock sound (the presenter then shows "Projector sound: on"). After a reveal, **Hear it** dubs the alibi on screen, not whatever you browse afterwards. It plays once from the next loop start with captions hidden, then the captioned loop returns. **Stop dub** brings captions back at once. Hold, Back, a new reveal or a new take cancel a pending dub. **Hear it** again replays from cache. Dub errors show only on the presenter.
+3. The talk: **Title slide** → **Show original on screen** → **Reveal selected alibi** → **Hear it** → **Final slide** (QR to the crowd flow; it stays up while the room plays). Slides stop any dub and keep the take and its cached dubs, so **Show original on screen** goes straight back to the clip. A refreshed projector tab picks up whatever the presenter is showing (click it once again for sound). On localhost the QR uses the hosted URL from `<meta name="crowd-url">` in `public/index.html`.
+4. Record the volunteer. Pick an alibi privately, press **Show original on screen**, then **Reveal selected alibi**. **Back to original** and **Hold screen** do what they say.
+5. Stage dub. During setup, click the projector tab once to unlock sound (the presenter then shows "Projector sound: on"). After a reveal, **Hear it** dubs the alibi on screen, not whatever you browse afterwards. It plays once from the next loop start with captions hidden, then the captioned loop returns. **Stop dub** brings captions back at once. Hold, Back, a new reveal or a new take cancel a pending dub. **Hear it** again replays from cache. Dub errors show only on the presenter.
 
 ## The sample (fallback)
 

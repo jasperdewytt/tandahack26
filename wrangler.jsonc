@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "lip-service",
+  "name": "mouth-alibi",
   "main": "src/worker.ts",
   "compatibility_date": "2026-11-01",
   "workers_dev": true,

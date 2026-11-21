@@ -6,6 +6,7 @@ import type { DubMsg } from "./dub";
 export type StageMsg =
   | { t: "hello" }
   | { t: "hold" }
+  | { t: "slide"; n: Slide }
   | { t: "show"; clip: Blob; start: number; end: number; cues: Cue[]; reveal: number }
   | { t: "caption"; cues: Cue[]; reveal: number }
   | DubMsg
@@ -13,7 +14,9 @@ export type StageMsg =
   | { t: "audio"; on: boolean }
   | { t: "dub-state"; state: "queued" | "playing" | "done" | "stopped" | "no-audio"; key?: string };
 
-const NAME = "lip-service-stage";
+export type Slide = "title" | "final";
+
+const NAME = "mouth-alibi-stage";
 
 export function channel(onMsg: (m: StageMsg) => void): (m: StageMsg) => void {
   const ch = new BroadcastChannel(NAME);

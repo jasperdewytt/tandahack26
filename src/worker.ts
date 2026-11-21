@@ -1,4 +1,4 @@
-// Lip Service Worker: a thin proxy for Deepgram and Anthropic, plus the presenter-token check.
+// Mouth Alibi Worker: a thin proxy for Deepgram and Anthropic, plus the presenter-token check.
 // Static assets (the app, lex.txt, block.json) are served by Workers Assets.
 import Anthropic from "@anthropic-ai/sdk";
 import { DurableObject } from "cloudflare:workers";

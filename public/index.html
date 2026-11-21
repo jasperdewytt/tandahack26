@@ -3,9 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Lip Service</title>
-  <meta name="description" content="Lip Service: your mouth has an alibi. Record a line and see what else your lips could have said.">
+  <title>Mouth Alibi</title>
+  <meta name="description" content="Mouth Alibi: your mouth has an alibi. Record a line and see what else your lips could have said.">
   <meta name="theme-color" content="#F9E4E7">
+  <!-- The projector QR points here when the stage laptop runs on localhost (a phone can't reach localhost). -->
+  <meta name="crowd-url" content="https://mouth-alibi.lip-service.workers.dev/">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M4 32c8-12 18-16 28-10 10-6 20-2 28 10-8 14-18 20-28 20S12 46 4 32z' fill='%23D7193F'/%3E%3Cpath d='M8 32h48' stroke='%232B1530' stroke-width='3'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,7 +19,7 @@
 
     <!-- Crowd + presenter flow -->
     <section class="view" data-for="intro">
-      <h1 class="mark">Lip Service</h1>
+      <h1 class="mark">Mouth Alibi</h1>
       <p class="tagline">your mouth has an alibi</p>
       <p class="lede">Answer one question on camera. We find words your lips could just as easily have said, then play your clip back on mute.</p>
       <p class="question">What did you bring with you today?</p>
@@ -60,9 +62,11 @@
       <div class="presenter" id="presenter" hidden>
         <p class="presenter-title">Big screen</p>
         <div class="presenter-row">
+          <button id="p-title">Title slide</button>
           <button id="p-send">Show original on screen</button>
           <button id="p-reveal" disabled>Reveal selected alibi</button>
           <button id="p-back" disabled>Back to original</button>
+          <button id="p-final">Final slide</button>
           <button id="p-hold">Hold screen</button>
           <button id="p-save">Save as sample</button>
         </div>
@@ -91,13 +95,44 @@
     <section class="view screen" data-for="hold">
       <div class="hold">
         <div>
-          <h1 class="mark big">Lip Service</h1>
+          <h1 class="mark big">Mouth Alibi</h1>
           <p class="tagline big">your mouth has an alibi</p>
           <p class="tagline big join">Scan to find out what your lips could have said.</p>
         </div>
-        <div class="qr-wrap"><div id="qr"></div><p id="qr-url"></p></div>
+        <div class="qr-wrap"><div class="qr"></div><p class="qr-url"></p></div>
       </div>
       <p class="sound-hint" id="sound-hint">click once for sound</p>
+    </section>
+
+    <section class="view screen" data-for="title">
+      <div class="slide title-slide">
+        <h1 class="mark title-mark">Mouth Alibi</h1>
+        <p class="caption title-caption">your mouth has an alibi.</p>
+      </div>
+    </section>
+
+    <section class="view screen" data-for="final">
+      <div class="slide final-slide">
+        <div class="how">
+          <h2 class="ask">How do you write a joke for a mouth that’s already said something else?</h2>
+          <div class="flow">
+            <p class="step">Record a line</p>
+            <span class="down" aria-hidden="true"></span>
+            <p class="step">Map timing and mouth shapes</p>
+            <span class="down" aria-hidden="true"></span>
+            <p class="step joined into">Claude writes four alibis</p>
+            <span class="down" aria-hidden="true"></span>
+            <p class="loop-label">Rewrite the words that miss</p>
+            <p class="step joined">Check the fit, pick the joke</p>
+            <span class="bracket" aria-hidden="true"></span>
+          </div>
+        </div>
+        <div class="try">
+          <div class="qr"></div>
+          <p class="try-label">Try it with your face.</p>
+          <p class="qr-url"></p>
+        </div>
+      </div>
     </section>
 
     <section class="view screen" data-for="project">
