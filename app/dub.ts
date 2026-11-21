@@ -274,7 +274,11 @@ export class DubController {
       }
       this.cache.set(target.key, fitted);
     }
-    if (g !== this.gen) return false; // cancelled while waiting: never start stale audio
+    if (g !== this.gen) {
+      // Cancelled while waiting: never start stale audio. Keep it cached for a free replay.
+      this.status("Dub arrived after the screen changed, so it didn't play. Hear it replays it from cache.");
+      return false;
+    }
     this.send({ t: "dub", key: fitted.key, reveal: target.reveal, pcm: fitted.pcm, sampleRate: fitted.sampleRate });
     this.status("Dub ready. It plays on the screen at the next loop.");
     return true;
@@ -299,6 +303,7 @@ export class ScreenDub {
   private src: AudioBufferSourceNode | null = null;
   onState: (state: "queued" | "playing" | "done" | "stopped" | "no-audio", key?: string) => void = () => {};
   onCaptions: (show: boolean) => void = () => {};
+  onAudio: () => void = () => {};
 
   get audioOn() {
     return this.ctx?.state === "running";
@@ -307,8 +312,11 @@ export class ScreenDub {
   /** Call from a user gesture on the projector tab. */
   enable(): boolean {
     try {
-      this.ctx ??= new AudioContext();
-      this.ctx.resume().catch(() => {});
+      if (!this.ctx) {
+        this.ctx = new AudioContext();
+        this.ctx.onstatechange = () => this.onAudio();
+      }
+      this.ctx.resume().then(() => this.onAudio(), () => {});
       const b = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
       const s = this.ctx.createBufferSource();
       s.buffer = b;

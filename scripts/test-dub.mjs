@@ -94,9 +94,10 @@ const W = (w, s, e) => ({ w, p: w, s, e });
   const mapStore = () => { const m = new Map(); return { get: async (k) => m.get(k), put: async (k, v) => void m.set(k, v) }; };
   let calls = 0;
   let release;
+  let hold = true; // only the dedupe check keeps the first call waiting
   const synth = async () => {
     calls++;
-    await new Promise((r) => (release = r));
+    if (hold) await new Promise((r) => (release = r));
     return { ok: true, data: { audio_base64: "AAAA", alignment: align("Hi") } };
   };
   let now = Date.UTC(2026, 10, 21, 2, 0);
@@ -104,16 +105,17 @@ const W = (w, s, e) => ({ w, p: w, s, e });
   const input = (n) => ({ take: "take1", tokens: ["line", String(n)], text: `Line ${n}` });
   // Two Hear it presses while the first call is still running: one paid call.
   const a = gate.dub(input("one")), b = gate.dub(input("one"));
-  await new Promise((r) => setTimeout(r, 5));
+  while (!release) await new Promise((r) => setTimeout(r, 1));
   release();
   const [ra, rb] = await Promise.all([a, b]);
+  hold = false;
   assert.equal(calls, 1); assert.equal(ra.status, 200); assert.equal(rb.body.key, ra.body.key);
   assert(!JSON.stringify(ra.body).includes("voice-xyz"), "voice id never leaves the server");
   // Replay is a cache hit: zero cost, and not counted against the limits.
   for (let i = 0; i < 10; i++) assert.equal((await gate.dub(input("one"))).body.cached, true);
   assert.equal(calls, 1);
   // 5 per minute.
-  const fresh = async (n) => { const p = gate.dub(input(n)); await new Promise((r) => setTimeout(r, 1)); release?.(); return p; };
+  const fresh = (n) => gate.dub(input(n));
   for (let i = 2; i <= 5; i++) assert.equal((await fresh(i)).status, 200);
   const over = await gate.dub(input(6));
   assert.equal(over.status, 429); assert.equal(over.body.error, "minute_limit"); assert.equal(calls, 5);

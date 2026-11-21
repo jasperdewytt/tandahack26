@@ -542,10 +542,10 @@ function initScreen() {
     $("sound-hint").hidden = sdub.audioOn;
   };
   // Fullscreen and sound on first click/keypress (browsers require a gesture).
+  sdub.onAudio = reportAudio;
   const fs = () => {
     document.documentElement.requestFullscreen?.().catch(() => {});
     sdub.enable();
-    setTimeout(reportAudio, 300);
   };
   setInterval(reportAudio, 3000);
   addEventListener("click", fs);
