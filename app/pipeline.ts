@@ -179,6 +179,19 @@ export async function writeAlibis(
   };
   const picks: Alibi[] = [];
   const feedback: { line: string; note: string; problems: WriteLog["problems"]; unknown: string[] }[] = [];
+  // Relaxed fallback so a take never ends empty: every line the writer drafted, scored by how
+  // badly it breaks the normal rules (lower is better). Used only when nothing passes normally.
+  const spares = new Map<string, { alibi: Alibi; score: number }>();
+  const toAlibi = (text: string, tokens: string[], chk: ReturnType<Lexicon["check"]>): Alibi => ({
+    swaps: [], marks: chk.changed, text, tokens, chunks: chk.chunks,
+    cues: cuesFor(r.phrase.words, tokens, chk.chunks, r.phrase, words.map(w => w.syl), lex.describe(tokens).map(w => w.syl)),
+  });
+  const spare = (text: string, tokens: string[], chk: ReturnType<Lexicon["check"]>, score: number) => {
+    if (!chk.chunks.length) return;
+    const old = spares.get(text);
+    if (!old || score < old.score) spares.set(text, { alibi: toAlibi(text, tokens, chk), score });
+  };
+  const spokenSyllables = targetSyllables;
   for (let round = 0; round < 2 && picks.length < 2; round++) {
     onStatus(round ? "Trying a different punchline…" : "Writing your alibi…");
     try {
@@ -199,14 +212,17 @@ export async function writeAlibis(
           if (index < 0) fresh++;
           else remaining.splice(index, 1);
         }
+        const writtenSyllables = lex.describe(tokens).reduce((sum, w) => sum + (w.syl || 1), 0);
+        // Fits but rejected by the editor: 0. Too much copied: 20. Lip misses: by how many and how far off.
+        spare(text, tokens, chk, chk.ok ? (fresh < Math.ceil(said.length / 3) ? 20 : 0)
+          : 30 + chk.problems.length * 10 + Math.abs(writtenSyllables - spokenSyllables));
         if (!chk.ok || fresh < Math.ceil(said.length / 3)) {
           feedback.push({ line: text, problems: chk.problems, unknown: chk.unknown,
             note: chk.ok ? "Too much of the original survives. Change the action and the payoff." :
               `Your line has about ${lex.describe(tokens).reduce((sum, w) => sum + (w.syl || 1), 0)} syllables. Aim for ${targetSyllables}. Keep the premise; match a few more visible beats.` });
           continue;
         }
-        candidates.set(text, { swaps: [], marks: chk.changed, text, tokens, chunks: chk.chunks, cues: cuesFor(r.phrase.words, tokens, chk.chunks, r.phrase,
-          words.map(w => w.syl), lex.describe(tokens).map(w => w.syl)) });
+        candidates.set(text, toAlibi(text, tokens, chk));
       }
       if (!candidates.size) continue;
       for (const pick of picks) candidates.set(pick.text, pick);
@@ -218,9 +234,30 @@ export async function writeAlibis(
       }
       if (selected.length) picks.splice(0, picks.length, ...selected);
     } catch (error) {
-      if (!picks.length) throw error;
+      if (!picks.length && !spares.size) throw error;
       break;
     }
   }
-  return picks;
+  if (picks.length) return picks;
+  // Relaxed: nothing passed both the lip check and the editor. Show the closest lines instead.
+  if (!spares.size) {
+    onStatus("Trying a looser fit…");
+    try {
+      const data = await post("/api/alibi", JSON.stringify({ ...base, effort: "low" }));
+      for (const line of (data.lines ?? []) as string[]) {
+        const tokens = line.split(/\s+/).filter((t) => clean(t));
+        if (!tokens.length || block.blocks(line)) continue;
+        const text = caption(tokens);
+        const chk = lex.check(said, tokens);
+        log.push({ round: 3, line: text, ok: chk.ok, problems: chk.problems });
+        spare(text, tokens, chk, chk.ok ? 0 : 30 + chk.problems.length * 10);
+      }
+    } catch {
+      /* fall through to whatever we have */
+    }
+  }
+  // Lines that fit the lips beat lines that don't; only mix in misses when nothing fits.
+  const ranked = [...spares.values()].sort((a, b) => a.score - b.score);
+  const fits = ranked.filter((s) => s.score < 30);
+  return (fits.length ? fits : ranked).slice(0, 2).map((s) => s.alibi);
 }
