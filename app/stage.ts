@@ -1,12 +1,17 @@
 // Presenter tab <-> projector tab on the same machine, over BroadcastChannel.
 // The projector only ever receives the clip and the one set of subtitles it should show.
 import type { Cue } from "./pipeline";
+import type { DubMsg } from "./dub";
 
 export type StageMsg =
   | { t: "hello" }
   | { t: "hold" }
-  | { t: "show"; clip: Blob; start: number; end: number; cues: Cue[] }
-  | { t: "caption"; cues: Cue[] };
+  | { t: "show"; clip: Blob; start: number; end: number; cues: Cue[]; reveal: number }
+  | { t: "caption"; cues: Cue[]; reveal: number }
+  | DubMsg
+  // projector -> presenter (private status only; the projector never shows errors)
+  | { t: "audio"; on: boolean }
+  | { t: "dub-state"; state: "queued" | "playing" | "done" | "stopped" | "no-audio"; key?: string };
 
 const NAME = "lip-service-stage";
 

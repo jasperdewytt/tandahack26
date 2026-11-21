@@ -13,6 +13,9 @@ export interface Alibi {
   marks: number[]; // word positions in `text` that changed (for highlighting)
   text: string;
   cues: Cue[];
+  /** Stage dub needs the exact written tokens and their Lexicon.check alignment chunks. */
+  tokens?: string[];
+  chunks?: { s0: number; s1: number; w0: number; w1: number }[];
 }
 
 // Keep each growing subtitle short enough to follow on a phone.
@@ -202,7 +205,7 @@ export async function writeAlibis(
               `Your line has about ${lex.describe(tokens).reduce((sum, w) => sum + (w.syl || 1), 0)} syllables. Aim for ${targetSyllables}. Keep the premise; match a few more visible beats.` });
           continue;
         }
-        candidates.set(text, { swaps: [], marks: chk.changed, text, cues: cuesFor(r.phrase.words, tokens, chk.chunks, r.phrase,
+        candidates.set(text, { swaps: [], marks: chk.changed, text, tokens, chunks: chk.chunks, cues: cuesFor(r.phrase.words, tokens, chk.chunks, r.phrase,
           words.map(w => w.syl), lex.describe(tokens).map(w => w.syl)) });
       }
       if (!candidates.size) continue;

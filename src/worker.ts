@@ -1,13 +1,18 @@
 // Lip Service Worker: a thin proxy for Deepgram and Anthropic, plus the presenter-token check.
 // Static assets (the app, lex.txt, block.json) are served by Workers Assets.
 import Anthropic from "@anthropic-ai/sdk";
+import { DurableObject } from "cloudflare:workers";
 import { SYSTEM, EDITOR, SCHEMA, MODEL, EFFORT, MAX_OUTPUT_TOKENS } from "./prompt";
+import { DubGate, elevenLabs, dubRoute, type DubInput, type GateReply } from "./dub";
 
 export interface Env {
   ASSETS: Fetcher;
   DEEPGRAM_API_KEY: string;
   ANTHROPIC_API_KEY: string;
   PRESENTER_TOKEN?: string;
+  ELEVENLABS_API_KEY?: string;
+  ELEVENLABS_VOICE_ID?: string;
+  DUB: DurableObjectNamespace<DubGateDO>;
   RL_DG_IP: RateLimit;
   RL_DG_ALL: RateLimit;
   RL_AI_IP: RateLimit;
@@ -157,10 +162,32 @@ async function alibi(req: Request, env: Env): Promise<Response> {
 
 // ---------- presenter ----------
 
+const isPresenter = (k: string, env: Env) => !!env.PRESENTER_TOKEN && k.length >= 8 && k === env.PRESENTER_TOKEN;
+
 function stageAuth(url: URL, env: Env): Response {
-  const k = url.searchParams.get("k") ?? "";
-  const ok = !!env.PRESENTER_TOKEN && k.length >= 8 && k === env.PRESENTER_TOKEN;
+  const ok = isPresenter(url.searchParams.get("k") ?? "", env);
   return json({ ok }, ok ? 200 : 403);
+}
+
+// ---------- stage dub (presenter only) ----------
+
+/** One instance ("gate") holds the app-wide limits, the in-flight dedupe and the cache. */
+export class DubGateDO extends DurableObject<Env> {
+  private gate: DubGate | null = null;
+  private get g(): DubGate {
+    this.gate ??= new DubGate(
+      { get: (k) => this.ctx.storage.get(k), put: (k, v) => this.ctx.storage.put(k, v) },
+      elevenLabs(this.env.ELEVENLABS_API_KEY!, this.env.ELEVENLABS_VOICE_ID!),
+      this.env.ELEVENLABS_VOICE_ID!,
+    );
+    return this.gate;
+  }
+  dub(input: DubInput): Promise<GateReply> {
+    return this.g.dub(input);
+  }
+  usage() {
+    return this.g.usage();
+  }
 }
 
 export default {
@@ -172,6 +199,8 @@ export default {
           return await transcribe(req, env);
         case "/api/alibi":
           return await alibi(req, env);
+        case "/api/dub":
+          return await dubRoute(req, env, isPresenter(req.headers.get("x-presenter-key") ?? "", env), () => env.DUB.get(env.DUB.idFromName("gate")) as any);
         case "/api/stage":
           return stageAuth(url, env);
         case "/api/health":

@@ -266,3 +266,8 @@ main:is([data-view="hold"], [data-view="project"]) { max-width: none; padding: 0
 @media (prefers-reduced-motion: reduce) {
   .caption.swap { animation: none; }
 }
+
+/* Projector setup: one click unlocks sound. Small and quiet; gone once sound is on. */
+.sound-hint { position: fixed; right: 16px; bottom: 12px; margin: 0; font-size: 14px; opacity: .45; }
+.sound-hint[hidden] { display: none; }
+.caption[hidden] { display: none; }

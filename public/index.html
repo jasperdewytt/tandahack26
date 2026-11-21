@@ -66,6 +66,14 @@
           <button id="p-hold">Hold screen</button>
           <button id="p-save">Save as sample</button>
         </div>
+        <p class="presenter-title">Stage dub</p>
+        <div class="presenter-row">
+          <button id="p-hear" disabled>Hear it</button>
+          <button id="p-stop">Stop dub</button>
+          <button id="p-savedub" disabled>Save dub</button>
+        </div>
+        <p class="hint" id="p-audio">Projector sound: off. Click the screen tab once during setup.</p>
+        <p class="hint" id="p-dub" role="status" aria-live="polite"></p>
         <p class="hint" id="p-state">Screen is holding. <a href="/screen" target="_blank" rel="noopener">Open the screen tab</a> on the projector display.</p>
       </div>
       <button class="secondary" id="again">Record another</button>
@@ -89,6 +97,7 @@
         </div>
         <div class="qr-wrap"><div id="qr"></div><p id="qr-url"></p></div>
       </div>
+      <p class="sound-hint" id="sound-hint">click once for sound</p>
     </section>
 
     <section class="view screen" data-for="project">

@@ -9,6 +9,12 @@ export class LoopPlayer {
 
   /** Called on every frame/timeupdate with the playhead time (for timed subtitles). */
   onTime: ((t: number) => void) | null = null;
+  /** Called right after the loop wraps back to `start`. */
+  onLoop: (() => void) | null = null;
+
+  get el() {
+    return this.video;
+  }
 
   get time() {
     return this.video.currentTime;
@@ -35,6 +41,7 @@ export class LoopPlayer {
     if (t >= this.end || this.video.ended || t < this.start - 0.25) {
       this.video.currentTime = this.start;
       if (this.video.paused) this.video.play().catch(() => {});
+      this.onLoop?.();
     }
   }
 
