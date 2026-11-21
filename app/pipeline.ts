@@ -15,58 +15,46 @@ export interface Alibi {
   cues: Cue[];
 }
 
-const CUE_WORDS = 8; // flush a subtitle after this many written words
-const CUE_SECONDS = 3.2; // ...or after this long
-const SINGLE_CUE_WORDS = 10; // short lines stay one caption for the whole loop
+// Keep each growing subtitle short enough to follow on a phone.
+const CAPTION_WORDS = 5;
 
-/**
- * Split a caption into subtitles timed to the speech: each aligned chunk (written words that
- * the lips form while saying words[s0..s1)) inherits those spoken words' timings.
- */
+function buildWordCues(tokens: string[], starts: number[], end: number): Cue[] {
+  let group: string[] = [];
+  return tokens.map((token, i) => {
+    const sentenceStart = i === 0 || /[.!?]["’”']?$/.test(tokens[i - 1]);
+    if (sentenceStart || group.length >= CAPTION_WORDS) group = [];
+    group.push(sentenceStart ? token.charAt(0).toUpperCase() + token.slice(1) : token);
+    return { start: starts[i], end: starts[i + 1] ?? end, text: group.join(" ") };
+  });
+}
+
+/** Reveal each written word at its corresponding position in the spoken word timings. */
 export function cuesFor(
   words: Word[],
   tokens: string[],
   chunks: { s0: number; s1: number; w0: number; w1: number }[],
   phrase: Phrase,
 ): Cue[] {
-  const whole = caption(tokens);
-  if (tokens.length <= SINGLE_CUE_WORDS || !chunks.length) return [{ start: phrase.start, end: phrase.end, text: whole }];
-  // Build raw groups of written words with their spoken timings.
-  const groups: { w0: number; w1: number; start: number; end: number }[] = [];
-  let cur: { w0: number; w1: number; start: number; end: number } | null = null;
-  for (const c of chunks) {
-    if (!cur) cur = { w0: c.w0, w1: c.w1, start: words[c.s0].s, end: words[c.s1 - 1].e };
-    cur.w1 = c.w1;
-    cur.end = words[c.s1 - 1].e;
-    const lastTok = tokens[c.w1 - 1] ?? "";
-    const n = cur.w1 - cur.w0;
-    // Break at sentence ends, at commas once there's enough to read, or when it gets long.
-    // ...but never right after a little word ("a big bag of / socks") unless it's run very long.
-    const dangling = /^(a|an|the|of|to|in|on|at|my|your|and|or|but|for|with|is|i)$/i.test(lastTok) && cur.end - cur.start < 4.5;
-    if (/[.!?]$/.test(lastTok) || (/[,;:]$/.test(lastTok) && n >= 4) || (!dangling && (n >= CUE_WORDS || cur.end - cur.start >= CUE_SECONDS))) {
-      groups.push(cur);
-      cur = null;
+  const starts: number[] = [];
+  for (const { s0, s1, w0, w1 } of chunks) {
+    for (let i = w0; i < w1; i++) {
+      // A three-word rewrite of two spoken words can start partway through a word.
+      const position = s0 + (i - w0) * (s1 - s0) / (w1 - w0);
+      const index = Math.floor(position);
+      const word = words[index];
+      starts.push(word.s + (position - index) * (word.e - word.s));
     }
   }
-  if (cur) groups.push(cur);
-  // Fold a tiny last subtitle ("Three.") into the one before it.
-  if (groups.length > 1 && groups[groups.length - 1].w1 - groups[groups.length - 1].w0 < 3) {
-    const tail = groups.pop()!;
-    groups[groups.length - 1].w1 = tail.w1;
-    groups[groups.length - 1].end = tail.end;
-  }
-  const cues: Cue[] = groups.map((g) => {
-    let text = tokens.slice(g.w0, g.w1).join(" ").replace(/[,;:–—-]+$/, "");
-    // Capitalise only where a sentence starts, like real subtitles.
-    const startsSentence = g.w0 === 0 || /[.!?]$/.test(tokens[g.w0 - 1] ?? "");
-    if (startsSentence) text = text[0].toUpperCase() + text.slice(1);
-    return { start: g.start, end: g.end, text };
+  return buildWordCues(tokens, starts, phrase.end);
+}
+
+/** Older saved samples contain phrase timings only. Spread their words over each phrase. */
+export function expandSampleCues(cues: Cue[]): Cue[] {
+  return cues.flatMap(cue => {
+    const tokens = cue.text.trim().split(/\s+/).filter(Boolean);
+    const starts = tokens.map((_, i) => cue.start + i * (cue.end - cue.start) / tokens.length);
+    return buildWordCues(tokens, starts, cue.end);
   });
-  // No gaps: each subtitle stays up until the next one starts; the loop edges are covered too.
-  cues[0].start = phrase.start;
-  for (let i = 0; i < cues.length - 1; i++) cues[i].end = cues[i + 1].start;
-  cues[cues.length - 1].end = phrase.end;
-  return cues;
 }
 
 /** Subtitles for what was actually said, using the same timing rules. */
@@ -78,7 +66,7 @@ export function originalCues(phrase: Phrase): Cue[] {
 
 /** The subtitle to show at playback time t. */
 export function cueAt(cues: Cue[], t: number): string {
-  if (!cues.length) return "";
+  if (!cues.length || t < cues[0].start) return "";
   for (const c of cues) if (t < c.end) return c.text;
   return cues[cues.length - 1].text;
 }

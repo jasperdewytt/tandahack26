@@ -4,7 +4,7 @@ import { LoopPlayer } from "./player";
 import { Lexicon } from "./lexicon";
 import { Blocklist } from "./blocklist";
 import type { Word, Phrase } from "./phrase";
-import { rankPhrases, writeAlibis, caption, originalCues, cueAt, type Alibi, type Cue } from "./pipeline";
+import { rankPhrases, writeAlibis, caption, originalCues, expandSampleCues, cueAt, type Alibi, type Cue } from "./pipeline";
 import { channel, type StageMsg } from "./stage";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -346,6 +346,7 @@ function saveSample() {
   const ext = result.clip.type.includes("mp4") ? "mp4" : "webm";
   const meta = {
     clip: `clip.${ext}`,
+    cueFormat: "word-reveal",
     start: result.phrase.start,
     end: result.phrase.end,
     original: result.original,
@@ -419,13 +420,16 @@ async function loadSample() {
     });
     const clip = await fetch(`/sample/${meta.clip}`).then((r) => r.blob());
     const ws = (meta.original as string).split(" ").map((p, i) => ({ w: p, p, s: i, e: i }));
-    const whole = (text: string): Cue[] => [{ start: meta.start, end: meta.end, text }];
+    const sampleCues = (text: string, saved?: Cue[]) => {
+      if (saved?.length && meta.cueFormat === "word-reveal") return saved;
+      return expandSampleCues(saved?.length ? saved : [{ start: meta.start, end: meta.end, text }]);
+    };
     result = {
       clip,
       phrase: { words: ws, start: meta.start, end: meta.end },
       original: meta.original,
-      originalCues: meta.originalCues ?? whole(meta.original),
-      alibis: (meta.alibis as Alibi[]).map((a) => ({ ...a, cues: a.cues ?? whole(a.text) })),
+      originalCues: sampleCues(meta.original, meta.originalCues),
+      alibis: (meta.alibis as Alibi[]).map((a) => ({ ...a, cues: sampleCues(a.text, a.cues) })),
     };
     $("reveal-hint").textContent = "A sample clip, recorded with permission. Same footage, same speed, no sound.";
     await reveal();
