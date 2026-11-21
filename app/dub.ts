@@ -7,8 +7,8 @@ import type { Word } from "./phrase";
 export interface Alignment { characters: string[]; character_start_times_seconds: number[]; character_end_times_seconds: number[] }
 export interface Chunk { s0: number; s1: number; w0: number; w1: number }
 export interface Span { s: number; e: number }
-/** A piece of TTS audio [src0, src1) placed at media time [dst0, dst1). */
-export interface Segment { src0: number; src1: number; dst0: number; dst1: number }
+/** TTS audio [src0, src1) stretched as one run onto media time [dst0, dst1); knots are the word onsets inside it. */
+export interface Segment { src0: number; src1: number; dst0: number; dst1: number; text: string; knots: Knot[] }
 
 // ---------- alignment ----------
 
@@ -55,6 +55,17 @@ const TINY_SRC = 0.08;
 const SRC_PAD = 0.03; // let final consonants ring out, but never into the next word
 const ANCHOR_GAP = 0.15; // a gap in the lips this long gets its own anchor
 const MAX_SEGMENT = 1.6; // longest run stretched as one piece
+const ONSET_TOL = 0.06; // an internal word may land at most this far from its lip time
+const EDGE_SLACK = 0.06; // a segment may borrow this much silence on either side to fit
+const MAX_WORD_GAP = 0.35; // a split may leave at most this much silence before the next word
+export const MIN_RATE = 0.45; // dst/src: at most ~2.2x faster
+export const MAX_RATE = 2.2; // at most 2.2x slower
+
+/** A word onset inside a segment: TTS time `src` should be heard at media time `want`. */
+export interface Knot { src: number; dst: number; want: number }
+
+/** The words can't be stretched onto the lips intelligibly. Presenter-facing message. */
+export class FitError extends Error {}
 
 export interface PlanInput {
   words: Word[]; // spoken words (original timings)
@@ -67,9 +78,51 @@ export interface PlanInput {
   closedWrote?: boolean[]; // written token has closed lips
 }
 
+const rateOf = (s: Segment) => (s.dst1 - s.dst0) / Math.max(1e-6, s.src1 - s.src0);
+const inRange = (s: Segment) => rateOf(s) >= MIN_RATE && rateOf(s) <= MAX_RATE;
+
+/** Join b onto a: b's start becomes an internal knot, so b's first word stays on time. */
+function join(a: Segment, b: Segment): Segment {
+  return {
+    src0: a.src0, dst0: a.dst0, src1: b.src1, dst1: b.dst1, text: `${a.text} ${b.text}`,
+    knots: [...a.knots, { src: b.src0, dst: b.dst0, want: b.dst0 }, ...b.knots],
+  };
+}
+
 /**
- * Chunk-level anchors, refined to single words where the counts match. The first visible lip
- * closure becomes its own anchor; tiny neighbours are merged unless a pause separates them.
+ * Place the knots as close to their lip times as the rate limits allow (forward pass that
+ * always leaves the rest of the segment reachable). Returns the worst knot error.
+ */
+export function solveKnots(s: Segment): { worst: number; at: number } {
+  let prevSrc = s.src0, prevDst = s.dst0, worst = 0, at = -1;
+  s.knots.forEach((k, i) => {
+    const ds = Math.max(0, k.src - prevSrc), rest = Math.max(0, s.src1 - k.src);
+    const lo = Math.max(prevDst + MIN_RATE * ds, s.dst1 - MAX_RATE * rest);
+    const hi = Math.min(prevDst + MAX_RATE * ds, s.dst1 - MIN_RATE * rest);
+    k.dst = lo <= hi ? Math.min(hi, Math.max(lo, k.want)) : (lo + hi) / 2;
+    const err = Math.abs(k.dst - k.want);
+    if (err > worst) { worst = err; at = i; }
+    prevSrc = k.src;
+    prevDst = k.dst;
+  });
+  return { worst, at };
+}
+
+/** Cut a segment at knot i: both halves keep their own knots and meet at the exact lip time. */
+function splitAt(s: Segment, i: number): [Segment, Segment] {
+  const k = s.knots[i];
+  return [
+    { src0: s.src0, dst0: s.dst0, src1: k.src, dst1: k.want, text: s.text, knots: s.knots.slice(0, i) },
+    { src0: k.src, dst0: k.want, src1: s.src1, dst1: s.dst1, text: s.text, knots: s.knots.slice(i + 1) },
+  ];
+}
+
+/**
+ * Anchors at chunk level, refined to single words where the counts match. Pieces between
+ * anchors (visible pauses, punctuation, the first lip closure, the final word) are joined into
+ * smooth runs whose internal word onsets are kept as knots; a run is split where a word would
+ * still land more than ONSET_TOL off. Segments that can't be fitted within the stretch limits
+ * borrow a little silence or join a neighbour; if that still fails, FitError.
  */
 export function planSegments(p: PlanInput): Segment[] {
   const pairs: [number, number, number, number][] = [];
@@ -92,7 +145,6 @@ export function planSegments(p: PlanInput): Segment[] {
     if (!split) pairs.push([c.s0, c.s1, c.w0, c.w1]);
     if (p.closedSaid?.slice(c.s0, c.s1).some(Boolean)) closureDone = true;
   }
-  if (!closureDone && p.closedSaid) closureDone = true;
 
   // Word-level pieces, each marked if it must start a new segment.
   const pieces: (Segment & { anchor: boolean })[] = [];
@@ -113,16 +165,15 @@ export function planSegments(p: PlanInput): Segment[] {
       (closure && firstClosure) || // the first visible lip closure
       (k === pairs.length - 1 && dst1 - dst0 >= TINY_DST); // the final (stressed) word
     if (closure) firstClosure = false;
-    pieces.push({ src0, src1, dst0, dst1, anchor });
+    pieces.push({ src0, src1, dst0, dst1, anchor, text: p.tokens.slice(w0, w1).join(" "), knots: [] });
   });
+
   // Join the pieces between anchors so each phrase is stretched as one smooth run.
-  let segs: Segment[] = [];
-  for (const q of pieces) {
+  const segs: Segment[] = [];
+  for (const { anchor, ...q } of pieces) {
     const last = segs[segs.length - 1];
-    if (!q.anchor && last && q.dst1 - last.dst0 <= MAX_SEGMENT) {
-      last.src1 = q.src1;
-      last.dst1 = q.dst1;
-    } else segs.push({ src0: q.src0, src1: q.src1, dst0: q.dst0, dst1: q.dst1 });
+    if (!anchor && last && q.dst1 - last.dst0 <= MAX_SEGMENT) segs[segs.length - 1] = join(last, q);
+    else segs.push(q);
   }
 
   // Merge tiny pieces into the neighbour they touch most closely (never across a pause).
@@ -133,15 +184,73 @@ export function planSegments(p: PlanInput): Segment[] {
       if (s.dst1 - s.dst0 >= TINY_DST && s.src1 - s.src0 >= TINY_SRC) continue;
       const gapL = i > 0 ? s.dst0 - segs[i - 1].dst1 : Infinity;
       const gapR = i + 1 < segs.length ? segs[i + 1].dst0 - s.dst1 : Infinity;
-      const j = gapL <= gapR ? i - 1 : i + 1;
       if (Math.min(gapL, gapR) >= PAUSE) continue;
-      const [a, b] = j < i ? [segs[j], s] : [s, segs[j]];
-      segs.splice(Math.min(i, j), 2, { src0: a.src0, src1: b.src1, dst0: a.dst0, dst1: b.dst1 });
+      const j = gapL <= gapR ? i - 1 : i + 1;
+      segs.splice(Math.min(i, j), 2, j < i ? join(segs[j], s) : join(s, segs[j]));
       changed = true;
       break;
     }
   }
-  return segs;
+
+  // Out-of-range segments: borrow a little neighbouring silence, then try joining a neighbour.
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i];
+    if (inRange(s)) continue;
+    if (rateOf(s) < MIN_RATE) {
+      const roomL = Math.max(0, Math.min(EDGE_SLACK, s.dst0 - (i > 0 ? segs[i - 1].dst1 : p.start)));
+      const roomR = Math.max(0, Math.min(EDGE_SLACK, (i + 1 < segs.length ? segs[i + 1].dst0 : p.playEnd) - s.dst1));
+      const need = MIN_RATE * (s.src1 - s.src0) - (s.dst1 - s.dst0);
+      if (need <= roomL + roomR) {
+        const r = Math.min(roomR, need);
+        s.dst1 += r;
+        s.dst0 -= need - r;
+        continue;
+      }
+    }
+    const tryJoin = (j: number) => {
+      if (j < 0 || j >= segs.length) return false;
+      const [a, b] = j < i ? [segs[j], s] : [s, segs[j]];
+      if (b.dst0 - a.dst1 >= PAUSE) return false;
+      const m = join(a, b);
+      if (!inRange(m)) return false;
+      segs.splice(Math.min(i, j), 2, m);
+      return true;
+    };
+    if (tryJoin(i - 1) || tryJoin(i + 1)) i = Math.max(-1, i - 2);
+  }
+  for (const s of segs) {
+    if (inRange(s)) continue;
+    const r = rateOf(s);
+    throw new FitError(
+      r > MAX_RATE
+        ? `The voice says "${s.text}" too quickly for these lips (it would need ${r.toFixed(1)}x slowing). Captions stay on screen.`
+        : `The voice takes too long over "${s.text}" for these lips (it would need ${(1 / r).toFixed(1)}x speeding up). Captions stay on screen.`,
+    );
+  }
+
+  // Keep internal words on time: split a run where a word would still land too far off,
+  // as long as both halves stay within the stretch limits.
+  const out: Segment[] = [];
+  const queue = [...segs];
+  while (queue.length) {
+    const s = queue.shift()!;
+    const { worst, at } = solveKnots(s);
+    if (worst > ONSET_TOL) {
+      const [a, b] = splitAt(s, at);
+      // The words before the knot are too short to fill the lips' time even at the slowest
+      // usable rate: say them at that rate and leave a short pause before the next word.
+      if (rateOf(a) > MAX_RATE) {
+        const end = a.dst0 + MAX_RATE * (a.src1 - a.src0);
+        if (a.dst1 - end <= MAX_WORD_GAP) a.dst1 = end;
+      }
+      if (inRange(a) && inRange(b)) {
+        queue.unshift(a, b);
+        continue;
+      }
+    }
+    out.push(s);
+  }
+  return out;
 }
 
 // ---------- pitch-preserving time stretch (WSOLA) ----------
@@ -156,8 +265,11 @@ function resample(x: Float32Array, outLen: number): Float32Array {
   return out;
 }
 
-/** Stretch x to outLen samples without changing pitch. */
-export function stretch(x: Float32Array, outLen: number, sr: number): Float32Array {
+/**
+ * Stretch x to outLen samples without changing pitch. `map` (optional) lists [output sample,
+ * input sample] points the time map must pass through, so words inside a run stay on time.
+ */
+export function stretch(x: Float32Array, outLen: number, sr: number, map: [number, number][] = []): Float32Array {
   if (outLen <= 0) return new Float32Array(0);
   const N = 2 * Math.round(0.015 * sr); // 30 ms frames
   const H = N / 2;
@@ -165,6 +277,14 @@ export function stretch(x: Float32Array, outLen: number, sr: number): Float32Arr
   const win = new Float32Array(N).map((_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N));
   const n = x.length;
   const alpha = (n - N) / Math.max(1, outLen - N);
+  const pts: [number, number][] = [[0, 0], ...map, [outLen, n]];
+  const at = (o: number) => {
+    if (!map.length) return o * alpha;
+    let j = 1;
+    while (j < pts.length - 1 && pts[j][0] <= o) j++;
+    const [o0, i0] = pts[j - 1], [o1, i1] = pts[j];
+    return i0 + ((i1 - i0) * (o - o0)) / Math.max(1, o1 - o0);
+  };
   const tol = Math.round(0.008 * sr);
   const out = new Float32Array(outLen + N);
   const norm = new Float32Array(outLen + N);
@@ -172,7 +292,7 @@ export function stretch(x: Float32Array, outLen: number, sr: number): Float32Arr
   for (let o = 0; o < outLen; o += H) {
     let pos = 0;
     if (o > 0) {
-      const ideal = Math.min(n - N, Math.round(o * alpha));
+      const ideal = Math.max(0, Math.min(n - N, Math.round(at(o))));
       const nat = prev + H;
       let best = ideal, bestC = -Infinity;
       const lo = Math.max(0, ideal - tol), hi = Math.min(n - N, ideal + tol);
@@ -200,13 +320,12 @@ export function stretch(x: Float32Array, outLen: number, sr: number): Float32Arr
 
 // ---------- render ----------
 
-const MIN_RATE = 0.45; // dst/src: at most ~2.2x faster
-const MAX_RATE = 2.2; // at most 2.2x slower
 const FADE = 0.008;
 
 /**
- * Place every segment at its absolute offset from `start` (so errors never accumulate).
- * Fades stay inside each segment's own window; anything that can't fit is faded out.
+ * Place every segment at its absolute offset from `start` (so errors never accumulate), with
+ * its word knots on time. Fades stay inside each segment's own window. planSegments has already
+ * rejected anything outside the stretch limits, so nothing is truncated or padded here.
  */
 export function render(pcm: Float32Array, sr: number, segs: Segment[], start: number, playEnd: number): Float32Array {
   const out = new Float32Array(Math.max(0, Math.round((playEnd - start) * sr)));
@@ -214,10 +333,10 @@ export function render(pcm: Float32Array, sr: number, segs: Segment[], start: nu
     const a = Math.max(0, Math.round(s.src0 * sr)), b = Math.min(pcm.length, Math.round(s.src1 * sr));
     if (b - a < 8) continue;
     const L = Math.round((s.dst1 - s.dst0) * sr);
-    const rate = Math.min(MAX_RATE, Math.max(MIN_RATE, L / (b - a)));
-    const piece = stretch(pcm.subarray(a, b), Math.round((b - a) * rate), sr);
-    const off = Math.round((s.dst0 - start) * sr);
-    const len = Math.min(piece.length, L, out.length - off);
+    const map = s.knots.map((k): [number, number] => [Math.round((k.dst - s.dst0) * sr), Math.round(k.src * sr) - a]);
+    const piece = stretch(pcm.subarray(a, b), L, sr, map);
+    const off = Math.max(0, Math.round((s.dst0 - start) * sr));
+    const len = Math.min(piece.length, out.length - off);
     if (len <= 0) continue;
     const fade = Math.min(Math.round(FADE * sr), Math.floor(len / 4));
     for (let i = 0; i < len; i++) {
@@ -235,6 +354,7 @@ export function render(pcm: Float32Array, sr: number, segs: Segment[], start: nu
 
 export interface FitInput extends Omit<PlanInput, "times"> { alignment: Alignment; pcm: Float32Array; sampleRate: number }
 
+/** Throws FitError when the line can't be fitted intelligibly; never returns a partial render. */
 export function fit(f: FitInput): { pcm: Float32Array; segments: Segment[] } {
   const times = tokenTimes(f.tokens, f.alignment);
   const segments = planSegments({ ...f, times });
@@ -296,7 +416,11 @@ export class DubController {
       try {
         fitted = await p;
       } catch (e) {
-        if (g === this.gen) this.status(`Dub failed: ${(e as Error).message ?? e}. The silent reveal still works.`);
+        // Unusable fits are never cached or sent; the reason stays on the presenter's screen.
+        if (g === this.gen) {
+          this.status(e instanceof FitError ? e.message
+            : `Dub failed: ${String((e as Error)?.message ?? e).replace(/[.\s]+$/, "")}. The silent reveal still works.`);
+        }
         return false;
       }
       this.cache.set(target.key, fitted);
@@ -324,10 +448,22 @@ export class DubController {
  * Projector side. Audio is unlocked once by a click during setup. A queued dub starts at the
  * next loop boundary, plays once in sync with the video, then the captioned loop resumes.
  */
+/** The bits of a <video> the projector dub reads (a plain object in tests). */
+export interface VideoClock { currentTime: number; paused: boolean; seeking: boolean }
+
+const STALL_MS = 150; // no picture progress for this long = frozen
+const RESYNC = 0.15; // audio/picture drift that triggers a restart at the picture's position
+
 export class ScreenDub {
   private ctx: AudioContext | null = null;
   private pending: { key: string; reveal: number; buffer: AudioBuffer } | null = null;
-  private active: { key: string; buffer: AudioBuffer; start: number; node: AudioBufferSourceNode | null; t0: number; prev: number } | null = null;
+  private active: { key: string; buffer: AudioBuffer; start: number; node: AudioBufferSourceNode | null; t0: number; prev: number; advancedAt: number } | null = null;
+
+  /** Real browser defaults; tests pass a fake AudioContext and clock. */
+  constructor(
+    private createContext: () => AudioContext = () => new AudioContext(),
+    private now: () => number = () => performance.now(),
+  ) {}
   onState: (state: "queued" | "playing" | "done" | "stopped" | "no-audio", key?: string) => void = () => {};
   onCaptions: (show: boolean) => void = () => {};
   onAudio: () => void = () => {};
@@ -340,7 +476,7 @@ export class ScreenDub {
   enable(): boolean {
     try {
       if (!this.ctx) {
-        this.ctx = new AudioContext();
+        this.ctx = this.createContext();
         this.ctx.onstatechange = () => this.onAudio();
       }
       this.ctx.resume().then(() => this.onAudio(), () => {});
@@ -370,37 +506,40 @@ export class ScreenDub {
    * once the video is visibly moving again (seeks on recorded clips can freeze for a moment).
    * If the loop wraps while a dub is active, that pass is over.
    */
-  boundary(video: HTMLVideoElement, start: number) {
+  boundary(video: VideoClock, start: number) {
     if (this.active) this.finish("done");
     const p = this.pending;
     if (!p || !this.ctx) return;
     this.pending = null;
-    this.active = { key: p.key, buffer: p.buffer, start, node: null, t0: 0, prev: -1 };
+    this.active = { key: p.key, buffer: p.buffer, start, node: null, t0: 0, prev: video.currentTime, advancedAt: -Infinity };
     this.onCaptions(false);
     this.onState("playing", p.key);
     this.tick(video);
   }
 
   /**
-   * Called every frame. Audio follows the picture: nothing plays while the video is frozen
-   * (seeking, buffering, paused), and if they drift apart by more than 150 ms the audio is
-   * restarted at the picture's position.
+   * Called from every animation frame and timeupdate, so two calls can see the same video time
+   * during healthy playback; that alone never interrupts the audio. Audio follows the picture:
+   * it stops when the video is paused, seeking, or has made no progress for STALL_MS, starts
+   * only once the picture is moving, and restarts at the picture's position after drifting by
+   * more than RESYNC.
    */
-  tick(video: HTMLVideoElement) {
+  tick(video: VideoClock) {
     const a = this.active;
     if (!a || !this.ctx) return;
-    const t = video.currentTime;
-    const moving = !video.paused && !video.seeking && t > a.prev && a.prev >= 0;
+    const t = video.currentTime, now = this.now();
+    if (t > a.prev) a.advancedAt = now;
     a.prev = t;
-    if (!moving) {
+    const moving = !video.paused && !video.seeking && now - a.advancedAt <= STALL_MS;
+    const v = t - a.start;
+    if (!moving || v < 0) {
       if (a.node) this.silence(a);
       return;
     }
-    const v = t - a.start;
     if (v >= a.buffer.duration - 0.03) return this.finish("done");
     const latency = (this.ctx as any).outputLatency || this.ctx.baseLatency || 0;
     const drift = a.node ? this.ctx.currentTime - a.t0 - (v + latency) : Infinity;
-    if (Math.abs(drift) > 0.15) this.playFrom(a, v + latency);
+    if (Math.abs(drift) > RESYNC) this.playFrom(a, v + latency);
   }
 
   private playFrom(a: NonNullable<ScreenDub["active"]>, pos: number) {

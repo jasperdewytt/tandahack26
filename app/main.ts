@@ -6,7 +6,8 @@ import { Blocklist } from "./blocklist";
 import type { Word, Phrase } from "./phrase";
 import { rankPhrases, writeAlibis, caption, originalCues, expandSampleCues, cueAt, type Alibi, type Cue } from "./pipeline";
 import { channel, type StageMsg } from "./stage";
-import { DubController, ScreenDub, fit, wav, type Fitted, type DubTarget } from "./dub";
+import { DubController, ScreenDub, fit, type Fitted, type DubTarget } from "./dub";
+import { sampleExport } from "./sample";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const app = $("app");
@@ -435,35 +436,12 @@ function updatePresenter() {
   $("p-audio").textContent = projectorAudio ? "Projector sound: on." : "Projector sound: off. Click the screen tab once during setup.";
 }
 
+/** Save as sample: clip + manifest. Save dub: the same plus every cached fitted dub's WAV. */
 function saveSample(withDub: boolean) {
   if (!result) return;
   const res = result;
-  const ext = res.clip.type.includes("mp4") ? "mp4" : "webm";
-  const dubs: Record<string, string> = {};
-  res.alibis.forEach((a, i) => {
-    if (dub?.cache.has(dubKey(res, a))) dubs[String(i)] = `dub-${i + 1}.wav`;
-  });
-  const meta = {
-    clip: `clip.${ext}`,
-    cueFormat: "word-reveal",
-    takeId: res.takeId,
-    start: res.phrase.start,
-    end: res.phrase.end,
-    duration: Number.isFinite(res.duration) ? res.duration : null,
-    words: res.phrase.words,
-    original: res.original,
-    originalCues: res.originalCues,
-    alibis: res.alibis,
-    dubs,
-  };
-  download(res.clip, `clip.${ext}`);
-  download(new Blob([JSON.stringify(meta, null, 2)], { type: "application/json" }), "sample.json");
-  if (withDub) {
-    res.alibis.forEach((a, i) => {
-      const f = dub?.cache.get(dubKey(res, a));
-      if (f) download(wav(f.pcm, f.sampleRate), `dub-${i + 1}.wav`);
-    });
-  }
+  const { files } = sampleExport(res, (i) => dub?.cache.get(dubKey(res, res.alibis[i])), withDub);
+  for (const f of files) download(f.blob, f.name);
 }
 
 function download(blob: Blob, name: string) {

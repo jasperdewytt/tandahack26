@@ -13,14 +13,28 @@ const TYPES = {
   ".txt": "text/plain; charset=utf-8", ".mp4": "video/mp4", ".webm": "video/webm", ".map": "application/json", ".wav": "audio/wav",
 };
 const PORT = Number(process.env.PORT ?? 8080);
+// SAMPLE_DIR (or --sample-dir <path>) serves /sample/* from another folder (e.g. a synthetic test fixture) so test
+// recordings never have to be copied into public/.
+const argDir = process.argv.indexOf("--sample-dir");
+const dirArg = argDir > 0 ? process.argv[argDir + 1] : process.env.SAMPLE_DIR;
+const sampleDir = dirArg ? normalize(dirArg) : null;
 
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/api/stage") return send(res, 200, "application/json", '{"ok":true}');
   if (url.pathname.startsWith("/api/"))
     return send(res, 503, "application/json", JSON.stringify({ error: "offline", message: "Offline mode: play the sample clip instead." }));
-  const file = normalize(join(root, url.pathname));
-  if (!file.startsWith(root)) return send(res, 403, "text/plain", "no");
+  const base = sampleDir && url.pathname.startsWith("/sample/") ? sampleDir : root;
+  const rel = base === root ? url.pathname : url.pathname.slice("/sample".length);
+  const file = normalize(join(base, decodeURIComponent(rel)));
+  if (!file.startsWith(base)) return send(res, 403, "text/plain", "no");
+  if (base !== root) {
+    try {
+      return send(res, 200, TYPES[extname(file)] ?? "application/octet-stream", await readFile(file));
+    } catch {
+      return send(res, 404, "text/plain", "missing");
+    }
+  }
   try {
     return send(res, 200, TYPES[extname(file)] ?? "application/octet-stream", await readFile(file));
   } catch {

@@ -78,7 +78,7 @@ const W = (w, s, e) => ({ w, p: w, s, e });
     assert(Math.abs(hz - 220) < 12, `pitch moved to ${hz} Hz at ratio ${ratio}`);
   }
   const pcm = tone(2, 220);
-  const segs = [{ src0: 0, src1: 0.5, dst0: 1.2, dst1: 1.8 }, { src0: 0.6, src1: 1.2, dst0: 3.0, dst1: 3.3 }];
+  const segs = [{ src0: 0, src1: 0.5, dst0: 1.2, dst1: 1.8, text: "a", knots: [] }, { src0: 0.6, src1: 1.2, dst0: 3.0, dst1: 3.3, text: "b", knots: [] }];
   const out = app.render(pcm, sr, segs, 1.0, 3.25);
   assert.equal(out.length, Math.round(2.25 * sr));
   const rms = (a, b) => { let s = 0; for (let i = Math.round(a * sr); i < Math.round(b * sr); i++) s += out[i] ** 2; return Math.sqrt(s / ((b - a) * sr)); };
@@ -87,6 +87,56 @@ const W = (w, s, e) => ({ w, p: w, s, e });
   assert(rms(0.81, 1.99) === 0, "pause between pieces preserved");
   assert(rms(2.02, 2.24) > 0.2, "second piece lands at +2.0 s, clamped at the clip end");
   assert(Math.abs(out[Math.round(0.2 * sr)]) < 0.01, "fade-in starts inside the window");
+}
+
+// ---------- many-to-one / one-to-many mappings keep internal words on time ----------
+{
+  // said: "water bottle now" (3 words); wrote: "what a bottle now" (2:1 then 1:1 then 1:1 is
+  // modelled as one 1:2 chunk + two 1:1 chunks), and a 2:1 chunk "in my" -> "mine".
+  const words = [W("water", 0, 0.4), W("bottle", 0.4, 0.8), W("in", 0.8, 0.95), W("my", 0.95, 1.1), W("bag", 1.1, 1.5)];
+  const tokens = ["what", "a", "bottle", "mine", "bag"];
+  const chunks = [{ s0: 0, s1: 1, w0: 0, w1: 2 }, { s0: 1, s1: 2, w0: 2, w1: 3 }, { s0: 2, s1: 4, w0: 3, w1: 4 }, { s0: 4, s1: 5, w0: 4, w1: 5 }];
+  const times = [[0, 0.15], [0.16, 0.2], [0.22, 0.5], [0.52, 0.7], [0.72, 1.0]].map(([s, e]) => ({ s, e }));
+  const segs = app.planSegments({ words, tokens, chunks, times, start: 0, playEnd: 2 });
+  const onsetOf = (src) => {
+    for (const s of segs) {
+      const pts = [[s.src0, s.dst0], ...s.knots.map((k) => [k.src, k.dst]), [s.src1, s.dst1]];
+      for (const [a, b] of pts) if (Math.abs(a - src) < 1e-9) return b;
+    }
+    return null;
+  };
+  // Every chunk's first written word lands on its spoken word's start.
+  near(onsetOf(0.22), 0.4, 0.06); // "bottle"
+  near(onsetOf(0.52), 0.8, 0.06); // "mine" over "in my"
+  near(onsetOf(0.72), 1.1, 0.06); // "bag"
+}
+
+// ---------- segments outside the stretch range: finer fit, or a clear failure ----------
+{
+  const plan = (words, tokens, times, playEnd = 3) => app.planSegments({
+    words, tokens, chunks: tokens.map((_, i) => ({ s0: i, s1: i + 1, w0: i, w1: i + 1 })),
+    times: times.map(([s, e]) => ({ s, e })), start: 0, playEnd,
+  });
+  const throwsFit = (fn, re) => assert.throws(fn, (e) => e instanceof app.FitError && re.test(e.message));
+  // Overlong source: 1.6 s of TTS for a 0.3 s mouth movement, isolated by pauses.
+  throwsFit(() => plan([W("hi", 1.0, 1.3)], ["extraordinarily"], [[0, 1.6]]), /too long over "extraordinarily".*Captions stay/);
+  // Undersized source: 0.05 s of TTS for a 1.2 s mouth movement.
+  throwsFit(() => plan([W("absolutely", 0.5, 1.7)], ["a"], [[0, 0.05]]), /says "a" too quickly for these lips/);
+  // Slightly overlong (needs 2.6x faster) but there is silence on both sides: borrow it.
+  const ok = plan([W("hi", 1.0, 1.3)], ["extra"], [[0, 0.78]]);
+  assert.equal(ok.length, 1);
+  assert(ok[0].dst1 - ok[0].dst0 >= 0.45 * 0.81 - 1e-9 && ok[0].dst0 >= 0.94 - 1e-9 && ok[0].dst1 <= 1.36 + 1e-9);
+  // A too-short word with a neighbour close by joins it instead of failing.
+  const joined = plan([W("so", 0.0, 0.6), W("then", 0.62, 1.0)], ["a", "then"], [[0, 0.05], [0.06, 0.5]]);
+  assert.equal(joined.length, 1);
+  // A fit failure is never cached, never sent to the projector, and is reported privately.
+  const sent = [], notes = [];
+  const ctl = new app.DubController(async () => { throw new app.FitError("The voice says \"a\" too quickly for these lips. Captions stay on screen."); }, (m) => sent.push(m), (n) => notes.push(n));
+  assert.equal(await ctl.hear({ key: "t|x", reveal: 1, take: "t", tokens: ["a"] }), false);
+  assert.equal(ctl.cache.size, 0);
+  assert(!sent.some((m) => m.t === "dub"));
+  assert.match(notes.at(-1), /too quickly/);
+  assert(!/Dub ready/.test(notes.join(" ")));
 }
 
 // ---------- server: bounds, auth before anything, limits, cache, in-flight dedupe ----------

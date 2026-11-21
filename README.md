@@ -26,7 +26,18 @@ node scripts/try-alibi.mjs testdata/<transcript>.json [--topic pirates] [--effor
 
 Secrets live in `.env` (gitignored) and as Worker secrets: `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, `PRESENTER_TOKEN`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`.
 
-Checks (stubs only, no paid calls): `npm run check`, `npx tsc --noEmit -p src`, `node scripts/test-caption-timing.mjs`, `node scripts/test-dub.mjs`.
+Checks (stubs and saved responses only, no paid calls):
+
+```powershell
+npm run check
+npx tsc --noEmit -p src
+node scripts/test-caption-timing.mjs
+node scripts/test-dub.mjs            # alignment, plan, stretch, fit failures, server limits, presenter controller
+node scripts/test-dub-onsets.mjs     # word onsets after fitting (needs gitignored testdata/dub-response.json; skips otherwise)
+node scripts/test-screen-dub.mjs     # projector playback on a simulated clock: duplicates, stalls, pause, seek, loop wrap
+node scripts/test-sample-export.mjs  # Save as sample / Save dub manifests
+node scripts/make-offline-fixture.mjs; node scripts/verify-offline.mjs testdata/offline-fixture   # synthetic offline run (ffmpeg + Chrome)
+```
 
 ## On stage
 
@@ -37,7 +48,7 @@ Checks (stubs only, no paid calls): `npm run check`, `npx tsc --noEmit -p src`, 
 
 ## The sample (fallback)
 
-At kickoff, record a consented volunteer in presenter mode and press **Save as sample**. It downloads `clip.mp4` (or `.webm`) and `sample.json`. After a dub has played, **Save dub** downloads the same plus the fitted `dub-N.wav` files listed in `sample.json`; with those, **Hear it** needs no network. Put them all in `public/sample/`, commit and deploy. Older caption-only samples still load and reveal silently. Then:
+At kickoff, record a consented volunteer in presenter mode and press **Save as sample**. It downloads `clip.mp4` (or `.webm`) and `sample.json`. After a dub has played, **Save dub** downloads the same plus a `dub-N.wav` for every alibi with a fitted dub; its `sample.json` lists exactly those WAVs (Save as sample's lists none). With them, **Hear it** needs no network. Put them all in `public/sample/` (only a recording whose speaker agreed to this use), commit and deploy. Older caption-only samples still load and reveal silently. Check the folder with external network blocked: `npm run build; node scripts/verify-offline.mjs`. Then:
 
 - Public: `/sample` plays it, and the intro shows "Try the sample clip".
 - Presenter: `/stage?k=<token>&sample` loads it straight into the stage flow.
