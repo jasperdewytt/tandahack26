@@ -34,15 +34,28 @@ export function cuesFor(
   tokens: string[],
   chunks: { s0: number; s1: number; w0: number; w1: number }[],
   phrase: Phrase,
+  spokenSyllables?: number[],
+  writtenSyllables?: number[],
 ): Cue[] {
   const starts: number[] = [];
   for (const { s0, s1, w0, w1 } of chunks) {
-    for (let i = w0; i < w1; i++) {
-      // A three-word rewrite of two spoken words can start partway through a word.
-      const position = s0 + (i - w0) * (s1 - s0) / (w1 - w0);
-      const index = Math.floor(position);
-      const word = words[index];
-      starts.push(word.s + (position - index) * (word.e - word.s));
+    const spoken = words.slice(s0, s1).map((_, i) => spokenSyllables?.[s0 + i] || 1);
+    const written = tokens.slice(w0, w1).map((_, i) => writtenSyllables?.[w0 + i] || 1);
+    const spokenTotal = spoken.reduce((a, b) => a + b, 0);
+    const writtenTotal = written.reduce((a, b) => a + b, 0);
+    let writtenBeat = 0;
+    let source = 0;
+    let sourceBeat = 0;
+    for (const length of written) {
+      const beat = writtenBeat * spokenTotal / writtenTotal;
+      while (source + 1 < spoken.length && beat >= sourceBeat + spoken[source]) {
+        sourceBeat += spoken[source++];
+      }
+      const word = words[s0 + source];
+      const end = Math.min(word.e, phrase.end);
+      const fraction = (beat - sourceBeat) / spoken[source];
+      starts.push(Math.min(end, word.s) + fraction * Math.max(0, end - word.s));
+      writtenBeat += length;
     }
   }
   return buildWordCues(tokens, starts, phrase.end);
@@ -64,10 +77,15 @@ export function originalCues(phrase: Phrase): Cue[] {
   return cuesFor(phrase.words, tokens, chunks, phrase);
 }
 
+// Give the eye a brief head start on the mouth. Keep stored cues on the media timeline
+// so this applies once on each display, including saved samples and caption switches.
+const CAPTION_LEAD_SECONDS = 0.09;
+
 /** The subtitle to show at playback time t. */
 export function cueAt(cues: Cue[], t: number): string {
-  if (!cues.length || t < cues[0].start) return "";
-  for (const c of cues) if (t < c.end) return c.text;
+  const revealTime = t + CAPTION_LEAD_SECONDS;
+  if (!cues.length || revealTime < cues[0].start) return "";
+  for (const c of cues) if (revealTime < c.end) return c.text;
   return cues[cues.length - 1].text;
 }
 
@@ -184,7 +202,8 @@ export async function writeAlibis(
               `Your line has about ${lex.describe(tokens).reduce((sum, w) => sum + (w.syl || 1), 0)} syllables. Aim for ${targetSyllables}. Keep the premise; match a few more visible beats.` });
           continue;
         }
-        candidates.set(text, { swaps: [], marks: chk.changed, text, cues: cuesFor(r.phrase.words, tokens, chk.chunks, r.phrase) });
+        candidates.set(text, { swaps: [], marks: chk.changed, text, cues: cuesFor(r.phrase.words, tokens, chk.chunks, r.phrase,
+          words.map(w => w.syl), lex.describe(tokens).map(w => w.syl)) });
       }
       if (!candidates.size) continue;
       for (const pick of picks) candidates.set(pick.text, pick);
