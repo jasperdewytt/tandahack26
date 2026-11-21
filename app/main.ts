@@ -386,6 +386,11 @@ async function initPresenter() {
   $("p-hold").addEventListener("click", () => toScreen("hold"));
   $("p-title").addEventListener("click", () => toScreen("title"));
   $("p-final").addEventListener("click", () => toScreen("final"));
+  // Before the first take: slides and hold from the start screen.
+  $("presenter-intro").hidden = false;
+  $("pi-title").addEventListener("click", () => toScreen("title"));
+  $("pi-hold").addEventListener("click", () => toScreen("hold"));
+  $("pi-final").addEventListener("click", () => toScreen("final"));
   $("p-hear").addEventListener("click", () => {
     if (screenState !== "alibi" || !onScreen?.alibi) return;
     const { res, alibi } = onScreen;
@@ -492,13 +497,14 @@ function updatePresenter() {
 
 /** Projector connection and sound, from its regular reports. */
 function updateProjector() {
-  const el = $("p-projector");
   const connected = projectorSeen > 0 && Date.now() - projectorSeen < 5000;
   const ok = connected && projectorAudio;
-  el.dataset.ok = String(ok);
-  if (ok) el.textContent = "Projector connected, sound on.";
-  else if (connected) el.textContent = "Projector connected, sound off. Click the projector page once.";
-  else el.innerHTML = 'Projector not open. <a href="/screen" target="_blank" rel="noopener">Open the projector page</a>, drag it to the projector display and click it once.';
+  for (const el of [$("p-projector"), $("p-projector-intro")]) {
+    el.dataset.ok = String(ok);
+    if (ok) el.textContent = "Projector connected, sound on.";
+    else if (connected) el.textContent = "Projector connected, sound off. Click the projector page once.";
+    else el.innerHTML = 'Projector not open. <a href="/screen" target="_blank" rel="noopener">Open the projector page</a>, drag it to the projector display and click it once.';
+  }
 }
 
 /** Save as sample: clip + manifest. Save dub: the same plus every cached fitted dub's WAV. */

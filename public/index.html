@@ -31,6 +31,16 @@
       </label>
       <button class="primary" id="start" disabled>Start recording</button>
       <p class="aside" id="sample-wrap" hidden>No camera handy? <a href="/sample" id="sample-link">Try the sample clip</a>.</p>
+      <div class="presenter" id="presenter-intro" hidden>
+        <p class="presenter-title">Presenter</p>
+        <p class="projector" id="p-projector-intro" data-ok="false" role="status" aria-live="polite"></p>
+        <div class="presenter-row">
+          <button id="pi-title">Title slide</button>
+          <button id="pi-hold">Hold screen</button>
+          <button id="pi-final">Final slide</button>
+        </div>
+        <p class="hint">Start with the title slide, then record the volunteer here. The full run sheet appears once their alibis are ready.</p>
+      </div>
       <p class="aside" id="file-wrap">Camera won't open? <label class="linklike">Upload a short video<input type="file" id="file" class="file-pick" accept="video/*" capture="user" hidden></label>.</p>
     </section>
 
