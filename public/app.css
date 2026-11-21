@@ -46,7 +46,8 @@ main[data-view="fail"]    .view[data-for="fail"],
 main[data-view="hold"]    .view[data-for="hold"],
 main[data-view="project"] .view[data-for="project"],
 main[data-view="title"]   .view[data-for="title"],
-main[data-view="final"]   .view[data-for="final"] { display: block; }
+main[data-view="final"]   .view[data-for="final"],
+main[data-view="demo"]    .view[data-for="demo"] { display: block; }
 
 /* ---------- type ---------- */
 
@@ -275,8 +276,8 @@ main.presenting .frame { width: 100%; }
 
 /* ---------- projector ---------- */
 
-body:has(main:is([data-view="hold"], [data-view="project"], [data-view="title"], [data-view="final"])) { background: var(--night); color: var(--white); }
-main:is([data-view="hold"], [data-view="project"], [data-view="title"], [data-view="final"]) { max-width: none; padding: 0; }
+body:has(main:is([data-view="hold"], [data-view="project"], [data-view="title"], [data-view="final"], [data-view="demo"])) { background: var(--night); color: var(--white); }
+main:is([data-view="hold"], [data-view="project"], [data-view="title"], [data-view="final"], [data-view="demo"]) { max-width: none; padding: 0; }
 
 .hold {
   min-height: 100dvh;

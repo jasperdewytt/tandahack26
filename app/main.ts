@@ -391,6 +391,8 @@ async function initPresenter() {
   $("pi-title").addEventListener("click", () => toScreen("title"));
   $("pi-hold").addEventListener("click", () => toScreen("hold"));
   $("pi-final").addEventListener("click", () => toScreen("final"));
+  $("pi-demo").addEventListener("click", () => toScreen("demo"));
+  $("p-demo").addEventListener("click", () => toScreen("demo"));
   $("p-hear").addEventListener("click", () => {
     if (screenState !== "alibi" || !onScreen?.alibi) return;
     const { res, alibi } = onScreen;
@@ -443,7 +445,7 @@ async function requestDub(target: DubTarget): Promise<Fitted> {
 
 function resendScreen() {
   if (!send) return;
-  if (screenState === "title" || screenState === "final") return send({ t: "slide", n: screenState });
+  if (screenState === "title" || screenState === "final" || screenState === "demo") return send({ t: "slide", n: screenState });
   if (screenState === "hold" || !onScreen) return send({ t: "hold" });
   const { res, alibi } = onScreen;
   send({ t: "show", clip: res.clip, start: res.phrase.start, end: res.phrase.end, cues: alibi ? alibi.cues : res.originalCues, reveal: revealId });
@@ -470,7 +472,7 @@ function updatePresenter() {
   // What's on the projector now, and the one button to press next.
   const current: Step | null =
     screenState === "alibi" ? (heard ? "hear" : "alibi") :
-    screenState === "hold" ? null : screenState;
+    screenState === "hold" || screenState === "demo" ? null : screenState;
   const next: Step | null =
     current === null ? "title" :
     current === "title" ? "original" :
@@ -563,12 +565,19 @@ function initScreen() {
   sdub.onState = (state, key) => post({ t: "dub-state", state, key });
   screenPlayer.onLoop = () => sdub.boundary(screenPlayer.el, start);
   const post = channel(async (m) => {
+    const demo = $<HTMLVideoElement>("demo-player");
+    if (!(m.t === "slide" && m.n === "demo") && m.t !== "audio" && m.t !== "dub-state" && m.t !== "hello") demo.pause();
     if (m.t === "hold" || m.t === "slide") {
       sdub.stop();
       reveal = -1;
       screenPlayer.stop();
       lastClip = null;
       setView(m.t === "slide" ? m.n : "hold");
+      if (m.t === "slide" && m.n === "demo") {
+        demo.muted = false;
+        demo.currentTime = 0;
+        demo.play().catch(() => { demo.muted = true; demo.play().catch(() => {}); });
+      }
     } else if (m.t === "dub") {
       sdub.queue(m, reveal);
     } else if (m.t === "dub-stop") {

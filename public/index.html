@@ -38,6 +38,7 @@
           <button id="pi-title">Title slide</button>
           <button id="pi-hold">Hold screen</button>
           <button id="pi-final">Final slide</button>
+          <button id="pi-demo">Play demo video</button>
         </div>
         <p class="hint">Start with the title slide, then record the volunteer here. The full run sheet appears once their alibis are ready.</p>
       </div>
@@ -85,6 +86,7 @@
           <button id="p-back" disabled>Back to what they said</button>
           <button id="p-stop">Stop dub</button>
           <button id="p-hold">Hold screen</button>
+          <button id="p-demo">Play demo video</button>
         </div>
         <p class="presenter-title">After a good take</p>
         <div class="presenter-row">
@@ -144,6 +146,12 @@
           <p class="try-label">Try it with your face.</p>
           <p class="qr-url"></p>
         </div>
+      </div>
+    </section>
+
+    <section class="view screen" data-for="demo">
+      <div class="screen-frame">
+        <video id="demo-player" playsinline preload="auto" src="/demo.mp4"></video>
       </div>
     </section>
 

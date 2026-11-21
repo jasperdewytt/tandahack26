@@ -14,7 +14,7 @@ export type StageMsg =
   | { t: "audio"; on: boolean }
   | { t: "dub-state"; state: "queued" | "playing" | "done" | "stopped" | "no-audio"; key?: string };
 
-export type Slide = "title" | "final";
+export type Slide = "title" | "final" | "demo";
 
 const NAME = "mouth-alibi-stage";
 
