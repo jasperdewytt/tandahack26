@@ -8,7 +8,7 @@ Record a ~10 second answer on your phone. We transcribe it, find words your lips
 
 ## How it works
 
-- `app/` — the browser app (TypeScript, bundled by esbuild into `public/app.js`). Records video plus a parallel audio-only track, picks a short phrase between pauses, looks up lip-compatible words, validates Sonnet's picks, and loops the clip.
+- `app/` — the browser app (TypeScript, bundled by esbuild into `public/app.js`). Records video plus a parallel audio-only track, picks a short phrase between pauses, looks up lip-compatible words, checks Opus drafts against the mouth movements and asks an editor to pick the jokes, and loops the clip.
 - `src/worker.ts` — Cloudflare Worker. Proxies `/api/transcribe` (Deepgram Nova-3, word timings) and `/api/alibi` (Claude Opus 5.5 writer; prompt and settings in `src/prompt.ts`). Rate-limited per IP and globally with Cloudflare Rate Limiting bindings.
 - `app/pipeline.ts` — picks the stretch to loop, asks the writer for lines, checks each against the lips (`Lexicon.check`) and times the subtitles.
 - `scripts/build-index.mjs` — build-time lexicon. Spoken-English frequency list → blocklists (LDNOOBW + dsojevic) → CMUdict → 12 coarse mouth shapes → `public/lex.txt` and `public/block.json`. Exact matches keep the shape sequence and syllable count; one near miss may change a single shape, never closed lips (p/b/m), lip-on-teeth (f/v) or rounded lips (w/oo).

@@ -1,7 +1,7 @@
 // Lip Service Worker: a thin proxy for Deepgram and Anthropic, plus the presenter-token check.
 // Static assets (the app, lex.txt, block.json) are served by Workers Assets.
 import Anthropic from "@anthropic-ai/sdk";
-import { SYSTEM, SCHEMA, MODEL, EFFORT, MAX_OUTPUT_TOKENS } from "./prompt";
+import { SYSTEM, EDITOR, SCHEMA, MODEL, EFFORT, MAX_OUTPUT_TOKENS } from "./prompt";
 
 export interface Env {
   ASSETS: Fetcher;
@@ -82,7 +82,9 @@ interface AlibiReq {
   effort?: "low" | "medium"; // "low" is the fast first pass; anything else uses EFFORT
   words: { w: string; shapes: string; syl: number }[];
   hints: { said: string; options: string[] }[];
-  feedback?: { line: string; problems: { said: string; wrote: string }[]; unknown: string[] }[];
+  targetSyllables?: number;
+  candidates?: string[];
+  feedback?: { line: string; note?: string; problems: { said: string; wrote: string }[]; unknown: string[] }[];
 }
 
 async function alibi(req: Request, env: Env): Promise<Response> {
@@ -102,6 +104,7 @@ async function alibi(req: Request, env: Env): Promise<Response> {
   const cut = (x: unknown, n: number) => String(x ?? "").slice(0, n);
   const input = {
     said: cut(body.said, 400),
+    targetSyllables: Math.min(120, Math.max(0, Number(body.targetSyllables) || 0)),
     ...(body.topic ? { topic: cut(body.topic, 60) } : {}),
     words: (body.words ?? []).slice(0, 40).map((w) => ({ w: cut(w.w, 30), shapes: cut(w.shapes, 40), syl: Number(w.syl) || 0 })),
     hints: (body.hints ?? []).slice(0, 40).map((h) => ({ said: cut(h.said, 40), options: (h.options ?? []).slice(0, 10).map((o) => cut(o, 40)) })),
@@ -109,13 +112,15 @@ async function alibi(req: Request, env: Env): Promise<Response> {
       ? {
           feedback: body.feedback.slice(0, 6).map((f) => ({
             line: cut(f.line, 400),
+            note: cut(f.note, 160),
             problems: (f.problems ?? []).slice(0, 8).map((p) => ({ said: cut(p.said, 60), wrote: cut(p.wrote, 60) })),
             unknown: (f.unknown ?? []).slice(0, 8).map((u) => cut(u, 30)),
           })),
         }
       : {}),
   };
-  if (!input.said || !input.words.length) return json({ error: "empty" }, 400);
+  const candidates = Array.isArray(body.candidates) ? body.candidates.slice(0, 8).map((line) => cut(line, 400)) : null;
+  if (!input.said || !(candidates?.length || input.words.length)) return json({ error: "empty" }, 400);
 
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 90_000 });
   try {
@@ -123,12 +128,12 @@ async function alibi(req: Request, env: Env): Promise<Response> {
     // on its default fallback model inside the same call.
     const res: any = await (client.beta.messages.create as any)({
       model: MODEL,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      output_config: { effort: body.effort === "low" ? "low" : EFFORT, format: { type: "json_schema", schema: SCHEMA } },
+      max_tokens: candidates ? 1200 : MAX_OUTPUT_TOKENS,
+      output_config: { effort: candidates || body.effort === "low" ? "low" : EFFORT, format: { type: "json_schema", schema: SCHEMA } },
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
-      system: SYSTEM,
-      messages: [{ role: "user", content: JSON.stringify(input) }],
+      system: candidates ? EDITOR : SYSTEM,
+      messages: [{ role: "user", content: JSON.stringify(candidates ? { said: input.said, topic: input.topic, candidates } : input) }],
     });
     if (res.stop_reason === "refusal") return json({ lines: [], refused: true });
     const text = (res.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");

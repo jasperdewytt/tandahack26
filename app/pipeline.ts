@@ -157,41 +157,60 @@ export async function writeAlibis(
   effort: "low" | "medium" = "medium",
 ): Promise<Alibi[]> {
   const said = r.phrase.words.map((w) => w.w);
+  const words = lex.describe(said);
+  const targetSyllables = words.reduce((sum, w) => sum + (w.syl || 1), 0);
   const base = {
     said: caption(r.phrase.words.map((w) => w.p)),
-    words: lex.describe(said),
-    hints: r.slots.map((s) => ({ said: s.said, options: s.exact.slice(0, 12) })),
+    words, targetSyllables,
+    hints: r.slots.filter(s => s.n === 1).map(s => ({
+      said: s.said, options: [...s.exact, ...s.near].filter(word => !word.includes(" ")).slice(0, 4),
+    })),
     ...(topic.trim() ? { topic: topic.trim().slice(0, 60) } : {}),
     effort,
   };
-  const accepted: { text: string; marks: number[]; changed: number; cues: Cue[] }[] = [];
-  let feedback: { line: string; problems: { said: string; wrote: string }[]; unknown: string[] }[] | undefined;
-
-  for (let round = 0; round < 2 && accepted.length < 2; round++) {
-    onStatus(round === 0 ? "Writing your alibi… this takes about half a minute." : "Nudging the lines to fit your lips…");
-    const data = await post("/api/alibi", JSON.stringify(feedback ? { ...base, feedback } : base));
-    feedback = [];
-    for (const line of (data.lines ?? []) as string[]) {
-      const tokens = String(line).split(/\s+/).filter((t) => clean(t));
-      if (!tokens.length) continue;
-      const text = caption(tokens);
-      const chk = lex.check(said, tokens);
-      log.push({ round: round + 1, line: text, ok: chk.ok, problems: chk.problems });
-      // Must fit the lips, be clean, and actually change something.
-      if (chk.ok && chk.changedSaid > 0 && !block.blocks(text) && !accepted.some((x) => x.text === text)) {
-        accepted.push({ text, marks: chk.changed, changed: chk.changedSaid, cues: cuesFor(r.phrase.words, tokens, chk.chunks, r.phrase) });
-      } else if (!chk.ok) {
-        feedback.push({ line: text, problems: chk.problems, unknown: chk.unknown });
+  const picks: Alibi[] = [];
+  const feedback: { line: string; note: string; problems: WriteLog["problems"]; unknown: string[] }[] = [];
+  for (let round = 0; round < 2 && picks.length < 2; round++) {
+    onStatus(round ? "Trying a different punchline…" : "Writing your alibi…");
+    try {
+      const data = await post("/api/alibi", JSON.stringify(round ? { ...base, feedback } : base));
+      if (data.refused) break;
+      const candidates = new Map<string, Alibi>();
+      for (const line of (data.lines ?? []) as string[]) {
+        const tokens = line.split(/\s+/).filter((t) => clean(t));
+        if (!tokens.length || block.blocks(line)) continue;
+        const text = caption(tokens);
+        const chk = lex.check(said, tokens);
+        log.push({ round: round + 1, line: text, ok: chk.ok, problems: chk.problems });
+        // Count new words independently of lip alignment: a re-split chunk can contain copied words.
+        const remaining = said.map(clean);
+        let fresh = 0;
+        for (const token of tokens) {
+          const index = remaining.indexOf(clean(token));
+          if (index < 0) fresh++;
+          else remaining.splice(index, 1);
+        }
+        if (!chk.ok || fresh < Math.ceil(said.length / 3)) {
+          feedback.push({ line: text, problems: chk.problems, unknown: chk.unknown,
+            note: chk.ok ? "Too much of the original survives. Change the action and the payoff." :
+              `Your line has about ${lex.describe(tokens).reduce((sum, w) => sum + (w.syl || 1), 0)} syllables. Aim for ${targetSyllables}. Keep the premise; match a few more visible beats.` });
+          continue;
+        }
+        candidates.set(text, { swaps: [], marks: chk.changed, text, cues: cuesFor(r.phrase.words, tokens, chk.chunks, r.phrase) });
       }
+      if (!candidates.size) continue;
+      for (const pick of picks) candidates.set(pick.text, pick);
+      onStatus("Picking the punchline…");
+      const edited = await post("/api/alibi", JSON.stringify({ said: base.said, topic, candidates: [...candidates.keys()], effort: "low" }));
+      const selected = Array.from(new Set<string>(edited.lines ?? [])).flatMap(t => candidates.get(t) ?? []).slice(0, 2);
+      for (const line of candidates.keys()) {
+        if (!selected.some(a => a.text === line)) feedback.push({ line, note: "Fits the mouth, but needs a clearer premise and a payoff that follows from it.", problems: [], unknown: [] });
+      }
+      if (selected.length) picks.splice(0, picks.length, ...selected);
+    } catch (error) {
+      if (!picks.length) throw error;
+      break;
     }
   }
-  // The writer ranks its lines best first. Show its best, then the line least like it.
-  const pick = accepted.slice(0, 1);
-  if (accepted.length > 1) {
-    const words = (t: string) => new Set(t.toLowerCase().replace(/[^a-z' ]/g, "").split(" "));
-    const first = words(accepted[0].text);
-    const overlap = (t: string) => [...words(t)].filter((w) => first.has(w)).length / words(t).size;
-    pick.push(accepted.slice(1).reduce((best, x) => (overlap(x.text) < overlap(best.text) ? x : best)));
-  }
-  return pick.map((x) => ({ swaps: [], marks: x.marks, text: x.text, cues: x.cues }));
+  return picks;
 }

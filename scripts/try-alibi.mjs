@@ -49,11 +49,12 @@ const { SYSTEM, SCHEMA, MODEL, EFFORT, MAX_OUTPUT_TOKENS } = mod.prompt;
 const usage = [];
 const post = async (_path, body) => {
   const t = Date.now();
+  const editing = Array.isArray(JSON.parse(body).candidates);
   const res = await client.messages.create({
     model: MODEL,
-    max_tokens: MAX_OUTPUT_TOKENS,
-    output_config: { effort: opt("--effort", EFFORT), format: { type: "json_schema", schema: SCHEMA } },
-    system: SYSTEM,
+    max_tokens: editing ? 1200 : MAX_OUTPUT_TOKENS,
+    output_config: { effort: editing ? "low" : opt("--effort", EFFORT), format: { type: "json_schema", schema: SCHEMA } },
+    system: editing ? mod.prompt.EDITOR : SYSTEM,
     messages: [{ role: "user", content: body }],
   });
   usage.push({ ms: Date.now() - t, out: res.usage.output_tokens });

@@ -121,6 +121,16 @@ for (const line of readFileSync(join(cache, "freq.txt"), "utf8").split(/\r?\n/))
   lines.push(`${w} ${key} ${syl}${isCand ? "" : " *"}`);
 }
 
+// Speech frequency files often split contractions. Keep dictionary pronunciations for
+// contractions and inflections of familiar words so natural dialogue can pass the checker.
+for (const [word, phones] of pron) {
+  if (seen.has(word) || !/^[a-z][a-z']+$/.test(word) || isBlockedWord(word)) continue;
+  const stem = word.replace(/(?:s|ed|ing)$/, "");
+  if (!word.includes("'") && (stem === word || !(seen.has(stem) || seen.has(stem + "e")))) continue;
+  const { key, syl } = keyFor(phones);
+  lines.push(`${word} ${key} ${syl} *`);
+}
+
 writeFileSync(join(out, "lex.txt"), lines.join("\n") + "\n");
 writeFileSync(
   join(out, "block.json"),

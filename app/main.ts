@@ -4,7 +4,7 @@ import { LoopPlayer } from "./player";
 import { Lexicon } from "./lexicon";
 import { Blocklist } from "./blocklist";
 import type { Word, Phrase } from "./phrase";
-import { rankPhrases, writeAlibis, caption, originalCues, cueAt, type Alibi, type Cue, type WriteLog } from "./pipeline";
+import { rankPhrases, writeAlibis, caption, originalCues, cueAt, type Alibi, type Cue } from "./pipeline";
 import { channel, type StageMsg } from "./stage";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -161,53 +161,16 @@ async function process(take: Take) {
 
     const chosen = ranked[0];
     const post = (path: string, body: string) => api(path, body, "application/json");
-    const log: WriteLog[] = [];
     // Optional nudge for what the alibi is about; ignored if it hits the blocklist.
     const rawTopic = $<HTMLInputElement>("topic").value.trim().slice(0, 60);
     const topic = rawTopic && !block.blocks(rawTopic) ? rawTopic : "";
-    // Two writers at once: a quick low-effort pass so the reveal comes fast, and a slower
-    // medium-effort pass whose (funnier) lines replace the quick ones when they arrive.
-    let lastError: unknown = null;
-    const settle = (p: Promise<Alibi[]>) => p.catch((e) => ((lastError = e), [] as Alibi[]));
-    const fastP = settle(writeAlibis(chosen, lex, block, post, () => {}, [], topic, "low"));
-    const bestP = settle(writeAlibis(chosen, lex, block, post, status, log, topic, "medium"));
-    let bestDone = false;
-    bestP.then(() => (bestDone = true));
-    const first = await new Promise<Alibi[]>((resolve) => {
-      let pending = 2;
-      for (const p of [fastP, bestP]) p.then((a) => (a.length ? resolve(a) : --pending === 0 && resolve([])));
-    });
-    if (!first.length) {
-      if (lastError instanceof ApiError) throw lastError;
-      throw new Retake("No clean alibi", "We couldn't find a funny line that fits your lips. Try again with a different answer.");
-    }
-
-    const mine: Result = {
-      clip: take.video,
-      phrase: chosen.phrase,
-      original: caption(chosen.phrase.words.map((w) => w.p)),
-      originalCues: originalCues(chosen.phrase),
-      alibis: first,
+    const alibis = await writeAlibis(chosen, lex, block, post, status, [], topic);
+    if (!alibis.length) throw new Retake("No clean alibi", "We couldn't find a funny line that fits your lips. Try again with a different answer.");
+    result = {
+      clip: take.video, phrase: chosen.phrase, original: caption(chosen.phrase.words.map((w) => w.p)),
+      originalCues: originalCues(chosen.phrase), alibis,
     };
-    result = mine;
-    const upgrading = !bestDone;
-    $("upgrade-note").hidden = !upgrading;
     await reveal();
-    if (upgrading) {
-      bestP.then((better) => {
-        console.log("alibi lines", JSON.stringify(log));
-        if (result !== mine) return; // they've moved on to another recording
-        if (!better.length) {
-          $("upgrade-note").hidden = true;
-          return;
-        }
-        mine.alibis = better;
-        buildToggle();
-        setCaption();
-        if (presenter) updatePresenter();
-        flashNote("Funnier alibis just arrived.");
-      });
-    }
   } catch (e) {
     if (e instanceof Retake) fail(e.title, e.message);
     else if (e instanceof ApiError) fail("Something went wrong", e.message);
@@ -262,19 +225,6 @@ player.onTime = (t) => {
   const text = cueAt(cuesFor(selected), t);
   if (el.textContent !== text) el.textContent = text;
 };
-
-/** Briefly replace the "writing" note with a message, then hide it. */
-function flashNote(text: string) {
-  const el = $("upgrade-note");
-  el.lastChild!.textContent = text;
-  el.classList.add("arrived");
-  el.hidden = false;
-  setTimeout(() => {
-    el.hidden = true;
-    el.classList.remove("arrived");
-    el.lastChild!.textContent = "Writing funnier ones…";
-  }, 4000);
-}
 
 function buildToggle() {
   const box = $("toggle");
@@ -478,7 +428,6 @@ async function loadSample() {
       alibis: (meta.alibis as Alibi[]).map((a) => ({ ...a, cues: a.cues ?? whole(a.text) })),
     };
     $("reveal-hint").textContent = "A sample clip, recorded with permission. Same footage, same speed, no sound.";
-    $("upgrade-note").hidden = true;
     await reveal();
   } catch {
     fail("Sample not ready", "The sample clip isn't available yet. Record your own instead.");

@@ -212,15 +212,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .toggle button[aria-checked="true"] b { color: var(--subtitle); }
 .toggle mark { background: none; color: inherit; text-decoration: underline 3px var(--lipstick); text-underline-offset: 0.2em; }
 
-.note { font-weight: 700; margin: 0.75rem 0 0; display: flex; align-items: center; gap: 0.5rem; }
-.note[hidden] { display: none; }
-.note .dot {
-  width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--lipstick);
-  animation: pulse 1s ease-in-out infinite alternate;
-}
-.note.arrived .dot { animation: none; background: var(--ink); }
-@keyframes pulse { from { opacity: 0.25; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .note .dot { animation: none; } }
+
 
 /* ---------- presenter panel ---------- */
 
