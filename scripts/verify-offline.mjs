@@ -194,7 +194,7 @@ try {
   want.make();
   const modules = want.createSvgTag({ cellSize: 8, margin: 0, scalable: true }).match(/ d="([^"]+)"/)[1];
   assert.equal(await screen.ev(`document.querySelector(".final-slide .qr svg path").getAttribute("d")`), modules, "QR encodes the crowd URL");
-  assert(!(await screen.ev(`document.documentElement.outerHTML.includes("k=")`)), "no presenter key on the projector");
+  assert(!(await screen.ev(`/[?&]k=/.test(document.documentElement.outerHTML)`)), "no presenter key on the projector");
   ok(`final slide: QR and URL point at ${crowdHost}, no presenter key on the projector`);
   await sleep(1500);
   assert.equal(await view(), "final", "final slide stays put");

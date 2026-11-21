@@ -222,7 +222,54 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .presenter-title { font-weight: 700; margin: 0 0 0.75rem; }
 .presenter-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .presenter-row button { box-shadow: inset 0 0 0 2px var(--ink); padding: 0.75rem 1rem; }
-#p-reveal:not(:disabled) { background: var(--lipstick); color: var(--white); box-shadow: none; }
+
+/* Presenter on the Surface: preview on the left, the run sheet on the right, no scrolling. */
+main.presenting { max-width: 72rem; }
+@media (min-width: 50rem) {
+main.presenting[data-view="reveal"] .view[data-for="reveal"] {
+  display: grid;
+  grid-template-columns: minmax(0, 24rem) minmax(0, 1fr);
+  column-gap: 3rem;
+  align-items: start;
+}
+main.presenting .view[data-for="reveal"] > * { grid-column: 1; }
+main.presenting .view[data-for="reveal"] > .presenter { grid-column: 2; grid-row: 1 / span 4; margin: 0; padding: 0; border: 0; }
+main.presenting .frame { width: 100%; }
+}
+
+.run-title { font-size: var(--s2); margin: 0 0 0.5rem; }
+.projector { margin: 0 0 1rem; font-weight: 700; color: var(--lipstick-deep); }
+.projector[data-ok="true"] { color: var(--ink); }
+.projector a { color: inherit; text-underline-offset: 0.15em; }
+.run { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.run button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 2.25rem 1fr;
+  column-gap: 0.75rem;
+  align-items: center;
+  text-align: left;
+  border-radius: 0.9rem;
+  padding: 0.8rem 1rem;
+  box-shadow: inset 0 0 0 2px rgba(43,21,48,0.25);
+}
+.run-n {
+  grid-row: span 2;
+  width: 2.25rem; height: 2.25rem;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px currentColor;
+}
+.run-what { font-size: var(--s1); }
+.run-hint { font-weight: 400; font-size: var(--s-1); line-height: 1.35; color: var(--ink-soft); }
+/* What the projector shows now. */
+.run button[aria-current="true"] { background: var(--ink); color: var(--white); box-shadow: none; }
+.run button[aria-current="true"] .run-hint { color: var(--powder); }
+/* The one to press next. */
+.run button.next { background: var(--lipstick); color: var(--white); box-shadow: none; }
+.run button.next .run-hint { color: var(--white); }
+.run button.next .run-n { background: var(--white); color: var(--lipstick); box-shadow: none; }
+.presenter .presenter-title { margin-top: 1.25rem; }
 
 .fail-title { font-size: var(--s3); line-height: 1.1; margin: 2rem 0 1rem; }
 
@@ -358,4 +405,3 @@ main:is([data-view="hold"], [data-view="project"], [data-view="title"], [data-vi
 .try .qr svg { width: min(25vw, 50vh); display: block; }
 .try-label { font: 700 calc(2.9 * var(--u))/1.2 var(--font); color: var(--subtitle); margin: calc(2.4 * var(--u)) 0 0; }
 .try .qr-url { white-space: nowrap; font-size: calc(2 * var(--u)); color: var(--powder); margin: calc(0.6 * var(--u)) 0 0; }
-.presenter-row button[aria-pressed="true"] { background: var(--ink); color: var(--white); }

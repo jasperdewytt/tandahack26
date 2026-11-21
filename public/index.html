@@ -60,25 +60,27 @@
       <div class="toggle" id="toggle" role="radiogroup" aria-label="Caption"></div>
       <p class="hint" id="reveal-hint">Same footage, same speed, no sound. Tap between captions and watch the mouth.</p>
       <div class="presenter" id="presenter" hidden>
-        <p class="presenter-title">Big screen</p>
+        <h2 class="run-title">Run the talk</h2>
+        <p class="projector" id="p-projector" data-ok="false" role="status" aria-live="polite">Projector not open. <a href="/screen" target="_blank" rel="noopener">Open the projector page</a>, drag it to the projector display and click it once.</p>
+        <ol class="run" id="run">
+          <li><button id="p-title"><span class="run-n">1</span><span class="run-what">Title slide</span><span class="run-hint">Say “Watch my mouth. I’m only changing the caption.”</span></button></li>
+          <li><button id="p-send"><span class="run-n">2</span><span class="run-what">Show the clip</span><span class="run-hint">Silent loop with what they really said.</span></button></li>
+          <li><button id="p-reveal"><span class="run-n">3</span><span class="run-what">Reveal the alibi</span><span class="run-hint" id="p-reveal-hint">Same footage, new caption.</span></button></li>
+          <li><button id="p-hear"><span class="run-n">4</span><span class="run-what">Hear it</span><span class="run-hint" id="p-hear-hint">Plays once in their voice from the next loop.</span></button></li>
+          <li><button id="p-final"><span class="run-n">5</span><span class="run-what">Final slide</span><span class="run-hint">QR for the room. Leave it up while they play.</span></button></li>
+        </ol>
+        <p class="hint" id="p-dub" role="status" aria-live="polite"></p>
+        <p class="presenter-title">If you need to</p>
         <div class="presenter-row">
-          <button id="p-title">Title slide</button>
-          <button id="p-send">Show original on screen</button>
-          <button id="p-reveal" disabled>Reveal selected alibi</button>
-          <button id="p-back" disabled>Back to original</button>
-          <button id="p-final">Final slide</button>
-          <button id="p-hold">Hold screen</button>
-          <button id="p-save">Save as sample</button>
-        </div>
-        <p class="presenter-title">Stage dub</p>
-        <div class="presenter-row">
-          <button id="p-hear" disabled>Hear it</button>
+          <button id="p-back" disabled>Back to what they said</button>
           <button id="p-stop">Stop dub</button>
+          <button id="p-hold">Hold screen</button>
+        </div>
+        <p class="presenter-title">After a good take</p>
+        <div class="presenter-row">
+          <button id="p-save">Save as sample</button>
           <button id="p-savedub" disabled>Save dub</button>
         </div>
-        <p class="hint" id="p-audio">Projector sound: off. Click the screen tab once during setup.</p>
-        <p class="hint" id="p-dub" role="status" aria-live="polite"></p>
-        <p class="hint" id="p-state">Screen is holding. <a href="/screen" target="_blank" rel="noopener">Open the screen tab</a> on the projector display.</p>
       </div>
       <button class="secondary" id="again">Record another</button>
     </section>

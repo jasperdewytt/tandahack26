@@ -260,14 +260,18 @@ function buildToggle() {
       } else b.append(w);
     });
     b.addEventListener("click", () => {
-      selected = n;
-      box.querySelectorAll("button").forEach((x, k) => x.setAttribute("aria-checked", String(k === n)));
-      setCaption();
+      selectCaption(n);
       player.play(); // resumes if autoplay was blocked; never seeks
-      if (presenter) updatePresenter();
     });
     box.append(b);
   });
+}
+
+function selectCaption(n: number) {
+  selected = n;
+  $("toggle").querySelectorAll("button").forEach((x, k) => x.setAttribute("aria-checked", String(k === n)));
+  setCaption();
+  if (presenter) updatePresenter();
 }
 
 function setCaption() {
@@ -298,6 +302,8 @@ let onScreen: { res: Result; alibi: Alibi | null; n: number } | null = null;
 let revealId = 0;
 let presenterKey = "";
 let projectorAudio = false;
+let projectorSeen = 0; // last message from the projector tab (it reports sound every 3 s)
+let heard = false; // Hear it pressed for the alibi now on screen
 let dub: DubController | null = null;
 
 const dubKey = (res: Result, alibi: Alibi) => `${res.takeId}|${alibi.text}`;
@@ -309,12 +315,19 @@ async function initPresenter() {
   presenter = true;
   presenterKey = k;
   document.title = "Mouth Alibi · presenter";
+  app.classList.add("presenting");
+  setInterval(updateProjector, 1000);
   send = channel((m) => {
+    if (m.t === "hello" || m.t === "audio" || m.t === "dub-state") {
+      const was = projectorSeen;
+      projectorSeen = Date.now();
+      if (!was) updateProjector();
+    }
     if (m.t === "hello") resendScreen();
     else if (m.t === "audio") {
       if (projectorAudio !== m.on) {
         projectorAudio = m.on;
-        updatePresenter();
+        updateProjector();
       }
     } else if (m.t === "dub-state") {
       dubStatus({
@@ -339,8 +352,10 @@ async function initPresenter() {
     updatePresenter();
   });
   $("p-reveal").addEventListener("click", () => {
-    if (!result || selected === 0) return;
+    if (!result || !result.alibis.length) return;
+    if (selected === 0) selectCaption(revealPick());
     dub!.cancel();
+    heard = false;
     const sameClip = onScreen?.res.clip === result.clip;
     screenState = "alibi";
     onScreen = { res: result, alibi: result.alibis[selected - 1], n: selected };
@@ -359,7 +374,7 @@ async function initPresenter() {
     updatePresenter();
   });
   // Hold and the slides leave the take, its alibis and its cached dubs on the Surface:
-  // "Show original on screen" puts the same clip straight back.
+  // "Show the clip" puts the same clip straight back.
   const toScreen = (s: "hold" | Slide) => {
     dub!.cancel();
     screenState = s;
@@ -376,6 +391,8 @@ async function initPresenter() {
     const { res, alibi } = onScreen;
     const timed = alibi.tokens?.length && alibi.chunks?.length;
     const target: DubTarget = { key: dubKey(res, alibi), reveal: revealId, take: res.takeId, tokens: timed ? alibi.tokens! : null };
+    heard = true;
+    updatePresenter();
     dub!.hear(target).then(updatePresenter);
   });
   $("p-stop").addEventListener("click", () => dub!.cancel("Dub stopped. Captions are back."));
@@ -427,23 +444,61 @@ function resendScreen() {
   send({ t: "show", clip: res.clip, start: res.phrase.start, end: res.phrase.end, cues: alibi ? alibi.cues : res.originalCues, reveal: revealId });
 }
 
+/** The alibi Reveal shows: the one picked on the left, else the first with a saved dub, else the first. */
+function revealPick(): number {
+  if (selected || !result) return selected || 1;
+  const withDub = result.alibis.findIndex((a) => dub?.cache.has(dubKey(result!, a)));
+  return withDub >= 0 ? withDub + 1 : 1;
+}
+
+type Step = "title" | "original" | "alibi" | "hear" | "final";
+const STEP_BUTTON: Record<Step, string> = { title: "p-title", original: "p-send", alibi: "p-reveal", hear: "p-hear", final: "p-final" };
+
 function updatePresenter() {
-  const st = $("p-state");
-  $<HTMLButtonElement>("p-reveal").disabled = !onScreen || selected === 0;
+  const alibiOn = screenState === "alibi" && !!onScreen?.alibi;
+  $<HTMLButtonElement>("p-send").disabled = !result;
+  $<HTMLButtonElement>("p-reveal").disabled = !onScreen || !result?.alibis.length;
   $<HTMLButtonElement>("p-back").disabled = screenState !== "alibi";
-  $<HTMLButtonElement>("p-hear").disabled = screenState !== "alibi";
+  $<HTMLButtonElement>("p-hear").disabled = !alibiOn;
   $<HTMLButtonElement>("p-savedub").disabled = !result || !result.alibis.some((a) => dub?.cache.has(dubKey(result!, a)));
-  $("p-send").textContent = onScreen ? "Resend original to screen" : "Show original on screen";
-  $("p-title").setAttribute("aria-pressed", String(screenState === "title"));
-  $("p-final").setAttribute("aria-pressed", String(screenState === "final"));
-  const what =
-    screenState === "hold" ? "Screen is holding." :
-    screenState === "title" ? "Screen shows the title slide." :
-    screenState === "final" ? "Screen shows the final slide with the QR." :
-    screenState === "original" ? "Screen shows the original caption." :
-    `Screen shows alibi ${onScreen?.n}.`;
-  st.firstChild!.textContent = what + " ";
-  $("p-audio").textContent = projectorAudio ? "Projector sound: on." : "Projector sound: off. Click the screen tab once during setup.";
+
+  // What's on the projector now, and the one button to press next.
+  const current: Step | null =
+    screenState === "alibi" ? (heard ? "hear" : "alibi") :
+    screenState === "hold" ? null : screenState;
+  const next: Step | null =
+    current === null ? "title" :
+    current === "title" ? "original" :
+    current === "original" ? "alibi" :
+    current === "alibi" ? "hear" :
+    current === "hear" ? "final" : null;
+  for (const [step, id] of Object.entries(STEP_BUTTON) as [Step, string][]) {
+    const b = $(id);
+    b.setAttribute("aria-current", String(step === current));
+    b.classList.toggle("next", step === next);
+  }
+
+  const pick = revealPick();
+  const pickText = result?.alibis[pick - 1]?.text;
+  $("p-reveal-hint").textContent = alibiOn
+    ? `On screen: “${onScreen!.alibi!.text}”`
+    : pickText ? `Shows ${selected ? "the alibi picked on the left" : "alibi " + pick}: “${pickText}”` : "No alibi for this take.";
+  const shown = onScreen?.alibi ?? result?.alibis[pick - 1];
+  const cached = !!(shown && onScreen && dub?.cache.has(dubKey(onScreen.res, shown)));
+  $("p-hear-hint").textContent = cached
+    ? "Saved dub ready. Plays once in their voice from the next loop."
+    : "Makes the dub in a few seconds, then plays once from the next loop.";
+}
+
+/** Projector connection and sound, from its regular reports. */
+function updateProjector() {
+  const el = $("p-projector");
+  const connected = projectorSeen > 0 && Date.now() - projectorSeen < 5000;
+  const ok = connected && projectorAudio;
+  el.dataset.ok = String(ok);
+  if (ok) el.textContent = "Projector connected, sound on.";
+  else if (connected) el.textContent = "Projector connected, sound off. Click the projector page once.";
+  else el.innerHTML = 'Projector not open. <a href="/screen" target="_blank" rel="noopener">Open the projector page</a>, drag it to the projector display and click it once.';
 }
 
 /** Save as sample: clip + manifest. Save dub: the same plus every cached fitted dub's WAV. */
