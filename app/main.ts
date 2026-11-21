@@ -544,6 +544,15 @@ function initScreen() {
   document.querySelectorAll(".qr").forEach((el) => (el.innerHTML = svg));
   document.querySelectorAll(".qr-url").forEach((el) => (el.textContent = crowd.replace(/^https?:\/\//, "").replace(/\/$/, "")));
 
+  // demo.mp4: title card to 3 s, portrait clip over blurred bands to ~37.9 s, then the final
+  // slide with its own QR. Show the overlay QR only while the bands are blurred filler.
+  const demoVid = $<HTMLVideoElement>("demo-player");
+  const demoQr = document.querySelector<HTMLElement>(".demo-qr")!;
+  const syncDemoQr = () => { demoQr.hidden = !(demoVid.currentTime >= 3 && demoVid.currentTime < 37.8); };
+  demoVid.addEventListener("timeupdate", syncDemoQr);
+  demoVid.addEventListener("seeked", syncDemoQr);
+  syncDemoQr();
+
   const screenPlayer = new LoopPlayer($<HTMLVideoElement>("screen-player"));
   const cap = $("screen-caption");
   let lastClip: Blob | null = null;

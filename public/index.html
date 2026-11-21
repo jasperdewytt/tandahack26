@@ -151,7 +151,11 @@
 
     <section class="view screen" data-for="demo">
       <div class="screen-frame">
-        <video id="demo-player" playsinline preload="auto" src="/demo.mp4"></video>
+        <div class="demo-box">
+          <video id="demo-player" playsinline preload="auto" src="/demo.mp4"></video>
+          <!-- Sits in the blurred band right of the portrait clip so the room can keep scanning. -->
+          <div class="demo-qr"><div class="qr"></div><p class="qr-url"></p></div>
+        </div>
       </div>
     </section>
 
